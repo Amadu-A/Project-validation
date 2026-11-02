@@ -1,0 +1,228 @@
+/* frontend/src/css/blocks/analysis-form.css */
+
+/*
+ * BEM-блок формы запуска анализа.
+ *
+ * Файл оформляет поля загрузки, выбор PDF-страниц, настройки пояснительной
+ * записки и кнопку запуска. Состояния доступности controls задаются через
+ * стандартный disabled, а JavaScript не использует CSS-классы как DOM API.
+ */
+
+.analysis-form {
+  display: grid;
+  gap: var(--space-7);
+}
+
+.analysis-form__field {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.analysis-form__label {
+  font-weight: var(--font-weight-semibold);
+}
+
+.analysis-form__control {
+  width: 100%;
+  padding: var(--control-padding);
+
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-control);
+
+  color: var(--color-text-primary);
+  background: var(--color-surface);
+}
+
+.analysis-form__control:disabled {
+  color: var(--color-text-disabled);
+  background: var(--color-disabled);
+
+  cursor: not-allowed;
+}
+
+.analysis-form__hint {
+  margin-bottom: 0;
+
+  color: var(--color-text-secondary);
+}
+
+.analysis-form__required {
+  color: var(--color-danger);
+}
+
+.analysis-form__context {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-5);
+
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-6);
+
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-block);
+
+  background: var(--color-surface-secondary);
+}
+
+.analysis-form__setting { display: grid; align-content: start; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-3); padding: var(--space-5); border: 1px solid var(--color-border); border-radius: var(--radius-control); background: var(--color-surface); }
+.analysis-form__setting > .analysis-form__hint { grid-column: 1; font-size: .9rem; line-height: 1.5; }
+.analysis-form__setting > .setting-help { grid-column: 2; grid-row: 1 / span 2; }
+.analysis-form__setting:has(.setting-help[open]) { grid-template-columns: minmax(0, 1fr); }
+.analysis-form__setting:has(.setting-help[open]) > .setting-help { grid-column: 1; grid-row: auto; }
+.analysis-form__sources-note { padding: var(--space-5); border-radius: var(--radius-control); background: var(--color-accent-soft); font-size: .9rem; line-height: 1.5; }
+.analysis-form__sources-note p { margin: var(--space-2) 0; }
+.analysis-form__sources-note a { color: var(--color-accent); }
+.analysis-form :focus-visible { outline: 3px solid var(--color-accent); outline-offset: 3px; }
+
+.analysis-form__context-title {
+  padding: 0 var(--space-2);
+
+  font-weight: var(--font-weight-semibold);
+}
+
+.analysis-form__toggle {
+  display: flex;
+  align-items: start;
+  gap: var(--space-3);
+
+  width: fit-content;
+
+  cursor: pointer;
+}
+
+.analysis-form__toggle-control {
+  width: auto;
+  margin: 0;
+}
+
+.analysis-form__toggle-control:disabled {
+  cursor: not-allowed;
+}
+
+.analysis-form__toggle-label {
+  font-weight: var(--font-weight-semibold);
+}
+
+.analysis-form__note-range {
+  display: grid;
+  grid-column: 1 / -1;
+
+  grid-template-columns: repeat(
+    2,
+    minmax(0, 1fr)
+  );
+
+  gap: var(--space-5);
+}
+
+.analysis-form__context-feedback {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: var(--space-3);
+
+  padding: var(--space-5);
+
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-control);
+
+  color: var(--color-text-primary);
+  background: var(--color-warning-soft);
+}
+
+.analysis-form__context-feedback[hidden] {
+  display: none;
+}
+
+.analysis-form__context-feedback[data-state="error"] {
+  border-color: var(--color-danger);
+
+  background: var(--color-danger-soft);
+}
+
+.analysis-form__context-feedback-title {
+  color: var(--color-warning);
+}
+
+.analysis-form__context-feedback[data-state="error"]
+.analysis-form__context-feedback-title {
+  color: var(--color-danger);
+}
+
+.analysis-form__context-feedback-text,
+.analysis-form__context-feedback-hint {
+  margin: 0;
+}
+
+.analysis-form__context-feedback-list {
+  display: grid;
+  gap: var(--space-2);
+
+  margin: 0;
+  padding-left: var(--space-8);
+}
+
+.analysis-form__context-feedback-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.analysis-form__context-feedback-button {
+  padding: var(--space-3) var(--space-5);
+
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-control);
+
+  color: var(--color-text-primary);
+  background: var(--color-surface);
+
+  cursor: pointer;
+}
+
+.analysis-form__context-feedback-button--primary {
+  border-color: var(--color-accent);
+
+  color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.analysis-form__submit {
+  width: fit-content;
+  min-width: var(--button-min-width);
+
+  padding: var(--space-4) var(--space-7);
+
+  border: 0;
+  border-radius: var(--radius-control);
+
+  cursor: pointer;
+}
+
+.analysis-form__submit:disabled {
+  pointer-events: none;
+  opacity: 0.6;
+
+  cursor: not-allowed;
+}
+
+.analysis-form__submit-guard {
+  width: fit-content;
+}
+
+.analysis-form__submit-guard:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: var(--space-1);
+}
+
+@media (max-width: 640px) {
+  .analysis-form__context { grid-template-columns: 1fr; }
+  .analysis-form__note-range {
+    grid-template-columns: 1fr;
+  }
+
+  .analysis-form__context-feedback-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

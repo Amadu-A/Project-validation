@@ -1,0 +1,2142 @@
+// frontend/src/js/features/normative/catalog.js
+
+/**
+ * Управляет выбором раздела, документами и операциями нормативного каталога.
+ */
+
+import { createTrashIcon } from "../../components/icons.js";
+
+import {
+  NORMATIVE_POLL_INTERVAL_MS,
+} from "../../config.js";
+
+import {
+  requireElementWithin,
+} from "../../dom.js";
+
+import {
+  atomicReadiness,
+  createCategory,
+  createSection,
+  deleteCategory,
+  deleteDocument,
+  deleteSection,
+  documentContentUrl,
+  listCategories,
+  listDocuments,
+  listSections,
+  moveDocument,
+  queueDocument,
+  updateCategory,
+  updateSection,
+  uploadDocument,
+} from "./api.js";
+
+import { documentReadinessText, sectionReadinessText } from "./readiness.js";
+import { isAdmin } from "../auth/access.js";
+import { currentSession, subscribeSession } from "../auth/session.js";
+
+import { retainSectionSelection } from "./section-selection.js";
+
+
+const DOCUMENT_DRAG_TYPE = (
+  "application/x-pdrd-normative-document"
+);
+
+const SUPPORTED_FILE_ACCEPT = (
+  ".pdf,.doc,.docx,"
+  + "application/pdf,"
+  + "application/msword,"
+  + "application/vnd.openxmlformats-officedocument."
+  + "wordprocessingml.document"
+);
+
+const SUPPORTED_EXTENSIONS = [
+  ".pdf",
+  ".doc",
+  ".docx",
+];
+
+const STATUS_LABELS = {
+  uploaded: "Загружен",
+  queued: "В очереди",
+  indexing: "Индексируется",
+  ready: "Готов",
+  failed: "Ошибка",
+  deleting: "Удаляется",
+};
+
+
+function createTextButton(
+  text,
+  title,
+) {
+  const button = document.createElement(
+    "button",
+  );
+
+  button.type = "button";
+
+  button.className = (
+    "normative-sidebar__icon-button"
+  );
+
+  button.textContent = text;
+
+  button.title = title;
+
+  button.setAttribute(
+    "aria-label",
+    title,
+  );
+
+  return button;
+}
+
+
+
+
+function createTrashButton(
+  title,
+) {
+  const button = document.createElement(
+    "button",
+  );
+
+  button.type = "button";
+  button.dataset.normativeDelete = "";
+
+  button.className = (
+    "normative-sidebar__trash-button"
+  );
+
+  button.title = title;
+
+  button.setAttribute(
+    "aria-label",
+    title,
+  );
+
+  button.append(
+    createTrashIcon(),
+  );
+
+  return button;
+}
+
+
+function isReady(
+  documentItem,
+) {
+  return (
+    documentItem.index_status === "ready"
+    && documentItem.ready_for_analysis === true
+  );
+}
+
+
+function isIndexing(
+  documentItem,
+) {
+  return (
+    documentItem.index_status === "queued"
+    || documentItem.index_status === "indexing"
+  );
+}
+
+
+function isSupportedFile(
+  file,
+) {
+  const lowerName = file.name.toLowerCase();
+
+  return SUPPORTED_EXTENSIONS.some(
+    (extension) => (
+      lowerName.endsWith(
+        extension,
+      )
+    ),
+  );
+}
+
+
+function normalizeNormativeFiles(
+  fileList,
+) {
+  return Array.from(
+    fileList || [],
+  ).filter(
+    isSupportedFile,
+  );
+}
+
+
+export function createNormativeCatalog(
+  root,
+  {
+    onSectionChange = async () => {},
+    getSession = currentSession,
+    subscribe = subscribeSession,
+  } = {},
+) {
+  let diagnosticsVisible = isAdmin(getSession());
+  const sectionSelect = requireElementWithin(
+    root,
+    "[data-normative-section-select]",
+  );
+
+  const createSectionButton = requireElementWithin(
+    root,
+    "[data-normative-section-create]",
+  );
+
+  const renameSectionButton = requireElementWithin(
+    root,
+    "[data-normative-section-rename]",
+  );
+
+  const deleteSectionButton = requireElementWithin(
+    root,
+    "[data-normative-section-delete]",
+  );
+
+  const createCategoryButton = requireElementWithin(
+    root,
+    "[data-normative-category-create]",
+  );
+
+  const selectAllButton = requireElementWithin(
+    root,
+    "[data-normative-select-all]",
+  );
+
+  const clearSelectionButton = requireElementWithin(
+    root,
+    "[data-normative-clear-all]",
+  );
+
+  const uploadZone = requireElementWithin(
+    root,
+    "[data-normative-upload-zone]",
+  );
+
+  const fileInput = requireElementWithin(
+    root,
+    "[data-normative-file-input]",
+  );
+
+  const tree = requireElementWithin(
+    root,
+    "[data-normative-tree]",
+  );
+
+  const statusElement = requireElementWithin(
+    root,
+    "[data-normative-status]",
+  );
+
+
+  const state = {
+    sections: [],
+
+    sectionId: null,
+
+    categories: [],
+
+    documents: [],
+    atomicReadiness: null,
+    atomicGeneration: 0,
+
+    selectedBySection: new Map(),
+
+    readySeenBySection: new Map(),
+
+    pollTimer: null,
+    generation: 0,
+  };
+
+
+  function setStatus(
+    message,
+    stateName = "normal",
+  ) {
+    statusElement.textContent = message;
+
+    statusElement.dataset.state = stateName;
+  }
+
+
+  /** Возвращает состояние удаления выбранного раздела для всех операций UI. */
+  function selectedSectionDeleting() {
+    return state.sections.find((item) => item.section_id === state.sectionId)?.deleting === true;
+  }
+
+  function selectedSet() {
+    if (!state.sectionId) {
+      return new Set();
+    }
+
+    if (
+      !state.selectedBySection.has(
+        state.sectionId,
+      )
+    ) {
+      state.selectedBySection.set(
+        state.sectionId,
+        new Set(),
+      );
+    }
+
+    return state.selectedBySection.get(
+      state.sectionId,
+    );
+  }
+
+
+  function readySeenSet() {
+    if (!state.sectionId) {
+      return new Set();
+    }
+
+    if (
+      !state.readySeenBySection.has(
+        state.sectionId,
+      )
+    ) {
+      state.readySeenBySection.set(
+        state.sectionId,
+        new Set(),
+      );
+    }
+
+    return state.readySeenBySection.get(
+      state.sectionId,
+    );
+  }
+
+
+  function pruneSelection() {
+    const selected = selectedSet();
+
+    const available = new Set(
+      state.documents
+        .filter(
+          isReady,
+        )
+        .map(
+          (item) => item.document_id,
+        ),
+    );
+
+    for (const documentId of selected) {
+      if (
+        !available.has(
+          documentId,
+        )
+      ) {
+        selected.delete(
+          documentId,
+        );
+      }
+    }
+  }
+
+
+  function selectNewReadyDocumentsByDefault() {
+    if (!state.sectionId) {
+      return;
+    }
+
+    const selected = selectedSet();
+
+    const previouslyReady = readySeenSet();
+
+    const currentlyReady = new Set();
+
+    for (
+      const documentItem
+      of state.documents
+    ) {
+      if (!isReady(
+        documentItem,
+      )) {
+        continue;
+      }
+
+      currentlyReady.add(
+        documentItem.document_id,
+      );
+
+      if (
+        !previouslyReady.has(
+          documentItem.document_id,
+        )
+      ) {
+        selected.add(
+          documentItem.document_id,
+        );
+      }
+    }
+
+    state.readySeenBySection.set(
+      state.sectionId,
+      currentlyReady,
+    );
+
+    pruneSelection();
+  }
+
+
+  function childCategoryIds(
+    categoryId,
+  ) {
+    const result = new Set(
+      [
+        categoryId,
+      ],
+    );
+
+    let changed = true;
+
+    while (changed) {
+      changed = false;
+
+      for (const category of state.categories) {
+        if (
+          category.parent_id
+          && result.has(
+            category.parent_id,
+          )
+          && !result.has(
+            category.category_id,
+          )
+        ) {
+          result.add(
+            category.category_id,
+          );
+
+          changed = true;
+        }
+      }
+    }
+
+    return result;
+  }
+
+
+  function documentsInCategoryTree(
+    categoryId,
+  ) {
+    const categoryIds = childCategoryIds(
+      categoryId,
+    );
+
+    return state.documents.filter(
+      (documentItem) => (
+        isReady(
+          documentItem,
+        )
+        && documentItem.category_id
+        && categoryIds.has(
+          documentItem.category_id,
+        )
+      ),
+    );
+  }
+
+
+  function applyCategorySelection(
+    categoryId,
+    checked,
+  ) {
+    const selected = selectedSet();
+
+    for (
+      const documentItem
+      of documentsInCategoryTree(
+        categoryId,
+      )
+    ) {
+      if (checked) {
+        selected.add(
+          documentItem.document_id,
+        );
+
+      } else {
+        selected.delete(
+          documentItem.document_id,
+        );
+      }
+    }
+
+    renderTree();
+  }
+
+
+  function documentSelectionState(
+    documentItems,
+  ) {
+    const readyDocuments = documentItems.filter(
+      isReady,
+    );
+
+    if (!readyDocuments.length) {
+      return {
+        checked: false,
+        indeterminate: false,
+        disabled: true,
+      };
+    }
+
+    const selected = selectedSet();
+
+    const selectedCount = readyDocuments.filter(
+      (item) => (
+        selected.has(
+          item.document_id,
+        )
+      ),
+    ).length;
+
+    return {
+      checked: (
+        selectedCount
+        === readyDocuments.length
+      ),
+
+      indeterminate: (
+        selectedCount > 0
+        && selectedCount
+        < readyDocuments.length
+      ),
+
+      disabled: false,
+    };
+  }
+
+
+  function renderSectionSelect() {
+    sectionSelect.replaceChildren();
+
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "Выберите раздел";
+    placeholder.selected = !state.sectionId;
+    sectionSelect.append(placeholder);
+
+    for (const section of state.sections) {
+      const option = document.createElement(
+        "option",
+      );
+
+      option.value = section.section_id;
+
+      option.textContent = section.deleting ? `${section.name} — удаляется` : section.name;
+
+      option.selected = (
+        section.section_id
+        === state.sectionId
+      );
+
+      sectionSelect.append(
+        option,
+      );
+    }
+
+    const disabled = !state.sectionId || selectedSectionDeleting();
+
+    sectionSelect.disabled = (
+      state.sections.length === 0
+    );
+
+    renameSectionButton.disabled = disabled;
+
+    deleteSectionButton.disabled = !state.sectionId;
+
+    createCategoryButton.disabled = disabled;
+
+    selectAllButton.disabled = disabled;
+
+    clearSelectionButton.disabled = disabled;
+
+    fileInput.disabled = disabled;
+
+    uploadZone.dataset.disabled = (
+      disabled
+        ? "true"
+        : "false"
+    );
+  }
+
+
+  function createDocumentName(
+    documentItem,
+  ) {
+    const canOpen = (
+      documentItem.mime_type
+      === "application/pdf"
+      || isReady(
+        documentItem,
+      )
+    );
+
+    if (canOpen) {
+      const link = document.createElement(
+        "a",
+      );
+
+      link.className = (
+        "normative-sidebar__document-link"
+      );
+
+      link.href = documentContentUrl(
+        documentItem.document_id,
+      );
+
+      link.target = "_blank";
+
+      link.rel = "noopener noreferrer";
+
+      link.textContent = (
+        documentItem.original_name
+      );
+
+      return link;
+    }
+
+    const text = document.createElement(
+      "span",
+    );
+
+    text.className = (
+      "normative-sidebar__document-link "
+      + "normative-sidebar__document-link--disabled"
+    );
+
+    text.textContent = (
+      documentItem.original_name
+    );
+
+    text.title = (
+      "Word preview станет доступен "
+      + "после завершения индексации."
+    );
+
+    return text;
+  }
+
+
+  function createDocumentRow(
+    documentItem,
+  ) {
+    const row = document.createElement(
+      "div",
+    );
+
+    row.className = (
+      "normative-sidebar__document"
+    );
+
+    row.draggable = true;
+
+    row.dataset.documentId = (
+      documentItem.document_id
+    );
+
+
+    const checkbox = document.createElement(
+      "input",
+    );
+
+    checkbox.type = "checkbox";
+
+    checkbox.className = (
+      "normative-sidebar__checkbox is-hidden"
+    );
+
+    checkbox.disabled = !isReady(
+      documentItem,
+    );
+
+    checkbox.checked = (
+      isReady(
+        documentItem,
+      )
+      && selectedSet().has(
+        documentItem.document_id,
+      )
+    );
+
+    checkbox.title = (
+      checkbox.disabled
+        ? "Документ станет доступен после индексации."
+        : "Использовать документ при анализе."
+    );
+
+    checkbox.addEventListener(
+      "change",
+      () => {
+        const selected = selectedSet();
+
+        if (checkbox.checked) {
+          selected.add(
+            documentItem.document_id,
+          );
+
+        } else {
+          selected.delete(
+            documentItem.document_id,
+          );
+        }
+
+        renderTree();
+      },
+    );
+
+
+    const content = document.createElement(
+      "div",
+    );
+
+    content.className = (
+      "normative-sidebar__document-content"
+    );
+
+
+    const documentName = createDocumentName(
+      documentItem,
+    );
+
+
+    const meta = document.createElement(
+      "div",
+    );
+
+    meta.className = (
+      "normative-sidebar__document-meta"
+    );
+
+
+    const status = document.createElement(
+      "span",
+    );
+
+    status.className = (
+      "normative-sidebar__status-badge"
+    );
+
+    status.dataset.status = (
+      documentItem.index_status
+    );
+
+    status.textContent = (
+      STATUS_LABELS[
+        documentItem.index_status
+      ]
+      || documentItem.index_status
+    );
+
+    meta.append(
+      status,
+    );
+
+
+    if (documentItem.index_error && diagnosticsVisible) {
+      const errorText = document.createElement(
+        "span",
+      );
+
+      errorText.className = (
+        "normative-sidebar__document-error"
+      );
+
+      errorText.textContent = (
+        documentItem.index_error
+      );
+
+      errorText.title = (
+        documentItem.index_error
+      );
+
+      meta.append(
+        errorText,
+      );
+    }
+
+
+    content.append(
+      documentName,
+      meta,
+    );
+
+    if (diagnosticsVisible) {
+      const atomic = state.atomicReadiness?.documents?.find((item) => item.document_id === documentItem.document_id);
+      const readiness = document.createElement("p");
+      readiness.className = "normative-sidebar__description";
+      readiness.textContent = documentReadinessText(atomic);
+      if (atomic?.reason) readiness.title = atomic.reason;
+      content.append(readiness);
+    }
+
+
+    const actions = document.createElement(
+      "div",
+    );
+
+    actions.className = (
+      "normative-sidebar__document-actions"
+    );
+
+
+    if (
+      documentItem.index_status === "uploaded"
+      || documentItem.index_status === "failed"
+    ) {
+      const retryButton = createTextButton(
+        "↻",
+        "Запустить индексацию",
+      );
+
+      retryButton.addEventListener(
+        "click",
+        async () => {
+          await runAction(
+            async () => {
+              await queueDocument(
+                documentItem.document_id,
+              );
+
+              await refreshSectionData(
+                false,
+              );
+            },
+            "Документ поставлен в очередь.",
+          );
+        },
+      );
+
+      actions.append(
+        retryButton,
+      );
+    }
+
+
+    const trashButton = createTrashButton(
+      `Удалить ${documentItem.original_name}`,
+    );
+
+    trashButton.disabled = (
+      isIndexing(
+        documentItem,
+      )
+      || documentItem.index_status
+      === "deleting"
+    );
+
+    trashButton.addEventListener(
+      "click",
+      async () => {
+        const confirmed = window.confirm(
+          (
+            "Удалить нормативный документ "
+            + `"${documentItem.original_name}"?`
+          ),
+        );
+
+        if (!confirmed) {
+          return;
+        }
+
+        await runAction(
+          async () => {
+            await deleteDocument(
+              documentItem.document_id,
+            );
+
+            selectedSet().delete(
+              documentItem.document_id,
+            );
+
+            await refreshSectionData(
+              false,
+            );
+          },
+          "Документ удалён.",
+        );
+      },
+    );
+
+    actions.append(
+      trashButton,
+    );
+
+
+    row.addEventListener(
+      "dragstart",
+      (event) => {
+        event.dataTransfer?.setData(
+          DOCUMENT_DRAG_TYPE,
+          documentItem.document_id,
+        );
+
+        if (event.dataTransfer) {
+          event.dataTransfer.effectAllowed = (
+            "move"
+          );
+        }
+      },
+    );
+
+
+    row.append(
+      checkbox,
+      content,
+      actions,
+    );
+
+    return row;
+  }
+
+
+  function openCategoryFilePicker(
+    categoryId,
+  ) {
+    const picker = document.createElement(
+      "input",
+    );
+
+    picker.type = "file";
+
+    picker.multiple = true;
+
+    picker.accept = SUPPORTED_FILE_ACCEPT;
+
+    picker.className = (
+      "normative-sidebar__file-input"
+    );
+
+    picker.addEventListener(
+      "change",
+      async () => {
+        await uploadFiles(
+          picker.files,
+          categoryId,
+        );
+
+        picker.remove();
+      },
+      {
+        once: true,
+      },
+    );
+
+    root.append(
+      picker,
+    );
+
+    picker.click();
+  }
+
+
+  function createCategoryNode(
+    category,
+  ) {
+    const wrapper = document.createElement(
+      "div",
+    );
+
+    wrapper.className = (
+      "normative-sidebar__category"
+    );
+
+    wrapper.dataset.categoryId = (
+      category.category_id
+    );
+
+
+    const header = document.createElement(
+      "div",
+    );
+
+    header.className = (
+      "normative-sidebar__category-header"
+    );
+
+    header.dataset.dragOver = "false";
+
+
+    const selection = document.createElement(
+      "input",
+    );
+
+    selection.type = "checkbox";
+
+    selection.className = (
+      "normative-sidebar__checkbox is-hidden"
+    );
+
+    const categoryDocuments = (
+      documentsInCategoryTree(
+        category.category_id,
+      )
+    );
+
+    const categorySelection = (
+      documentSelectionState(
+        categoryDocuments,
+      )
+    );
+
+    selection.checked = (
+      categorySelection.checked
+    );
+
+    selection.indeterminate = (
+      categorySelection.indeterminate
+    );
+
+    selection.disabled = (
+      categorySelection.disabled
+    );
+
+    selection.title = (
+      "Выбрать READY-документы папки и подпапок."
+    );
+
+    selection.addEventListener(
+      "change",
+      () => {
+        applyCategorySelection(
+          category.category_id,
+          selection.checked,
+        );
+      },
+    );
+
+
+    const name = document.createElement(
+      "span",
+    );
+
+    name.className = (
+      "normative-sidebar__category-name"
+    );
+
+    name.textContent = category.name;
+
+
+    const actions = document.createElement(
+      "div",
+    );
+
+    actions.className = (
+      "normative-sidebar__category-actions"
+    );
+
+
+    const uploadButton = createTextButton(
+      "⇧",
+      "Добавить PDF/DOC/DOCX в эту папку",
+    );
+
+    uploadButton.dataset.normativeCategoryUpload = (
+      category.category_id
+    );
+
+    uploadButton.addEventListener(
+      "click",
+      () => {
+        openCategoryFilePicker(
+          category.category_id,
+        );
+      },
+    );
+
+
+    const createChildButton = (
+      createTextButton(
+        "+",
+        "Создать вложенную папку",
+      )
+    );
+
+    createChildButton.addEventListener(
+      "click",
+      async () => {
+        await createCategoryInteractive(
+          category.category_id,
+        );
+      },
+    );
+
+
+    const renameButton = createTextButton(
+      "✎",
+      "Переименовать папку",
+    );
+
+    renameButton.addEventListener(
+      "click",
+      async () => {
+        const value = window.prompt(
+          "Новое название папки:",
+          category.name,
+        );
+
+        if (
+          value === null
+          || !value.trim()
+          || value.trim() === category.name
+        ) {
+          return;
+        }
+
+        await runAction(
+          async () => {
+            await updateCategory(
+              category.category_id,
+              {
+                name: value.trim(),
+              },
+            );
+
+            await refreshSectionData(
+              false,
+            );
+          },
+          "Папка переименована.",
+        );
+      },
+    );
+
+
+    const deleteButton = createTrashButton(
+      `Удалить папку ${category.name}`,
+    );
+
+    deleteButton.addEventListener(
+      "click",
+      async () => {
+        const confirmed = window.confirm(
+          (
+            `Удалить папку "${category.name}"? `
+            + "Документы останутся в разделе."
+          ),
+        );
+
+        if (!confirmed) {
+          return;
+        }
+
+        await runAction(
+          async () => {
+            await deleteCategory(
+              category.category_id,
+            );
+
+            await refreshSectionData(
+              false,
+            );
+          },
+          "Папка удалена.",
+        );
+      },
+    );
+
+
+    actions.append(
+      uploadButton,
+      createChildButton,
+      renameButton,
+      deleteButton,
+    );
+
+
+    header.append(
+      selection,
+      name,
+      actions,
+    );
+
+
+    header.addEventListener(
+      "dragenter",
+      (event) => {
+        event.preventDefault();
+
+        header.dataset.dragOver = "true";
+      },
+    );
+
+
+    header.addEventListener(
+      "dragover",
+      (event) => {
+        event.preventDefault();
+
+        header.dataset.dragOver = "true";
+
+        if (event.dataTransfer) {
+          event.dataTransfer.dropEffect = (
+            event.dataTransfer.files.length
+              ? "copy"
+              : "move"
+          );
+        }
+      },
+    );
+
+
+    header.addEventListener(
+      "dragleave",
+      (event) => {
+        if (
+          event.relatedTarget
+          && header.contains(
+            event.relatedTarget,
+          )
+        ) {
+          return;
+        }
+
+        header.dataset.dragOver = "false";
+      },
+    );
+
+
+    header.addEventListener(
+      "drop",
+      async (event) => {
+        event.preventDefault();
+
+        header.dataset.dragOver = "false";
+
+        await handleDrop(
+          event,
+          category.category_id,
+        );
+      },
+    );
+
+
+    const children = document.createElement(
+      "div",
+    );
+
+    children.className = (
+      "normative-sidebar__category-children"
+    );
+
+
+    const directDocuments = state.documents.filter(
+      (documentItem) => (
+        documentItem.category_id
+        === category.category_id
+      ),
+    );
+
+    for (
+      const documentItem
+      of directDocuments
+    ) {
+      children.append(
+        createDocumentRow(
+          documentItem,
+        ),
+      );
+    }
+
+
+    const childCategories = (
+      state.categories.filter(
+        (candidate) => (
+          candidate.parent_id
+          === category.category_id
+        ),
+      )
+    );
+
+    for (const child of childCategories) {
+      children.append(
+        createCategoryNode(
+          child,
+        ),
+      );
+    }
+
+
+    wrapper.append(
+      header,
+      children,
+    );
+
+    return wrapper;
+  }
+
+
+  function renderTree() {
+    tree.replaceChildren();
+
+    if (!state.sectionId || selectedSectionDeleting()) {
+      const empty = document.createElement(
+        "p",
+      );
+
+      empty.className = (
+        "normative-sidebar__empty"
+      );
+
+      empty.textContent = (
+        selectedSectionDeleting() ? "Удаление не завершено. Повторите удаление раздела; новая работа с ним запрещена." : "Создайте или выберите нормативный раздел."
+      );
+
+      tree.append(
+        empty,
+      );
+
+      return;
+    }
+
+
+    if (diagnosticsVisible) {
+      const readiness = document.createElement("p");
+      readiness.className = "normative-sidebar__description";
+      readiness.dataset.normativeAtomicReadiness = "";
+      readiness.textContent = sectionReadinessText(state.atomicReadiness);
+      tree.append(readiness);
+    }
+
+    const rootHeader = document.createElement(
+      "div",
+    );
+
+    rootHeader.className = (
+      "normative-sidebar__root-header"
+    );
+
+    rootHeader.textContent = "Без папки";
+
+    rootHeader.dataset.dragOver = "false";
+
+
+    rootHeader.addEventListener(
+      "dragenter",
+      (event) => {
+        event.preventDefault();
+
+        rootHeader.dataset.dragOver = "true";
+      },
+    );
+
+
+    rootHeader.addEventListener(
+      "dragover",
+      (event) => {
+        event.preventDefault();
+
+        rootHeader.dataset.dragOver = "true";
+      },
+    );
+
+
+    rootHeader.addEventListener(
+      "dragleave",
+      () => {
+        rootHeader.dataset.dragOver = "false";
+      },
+    );
+
+
+    rootHeader.addEventListener(
+      "drop",
+      async (event) => {
+        event.preventDefault();
+
+        rootHeader.dataset.dragOver = "false";
+
+        await handleDrop(
+          event,
+          null,
+        );
+      },
+    );
+
+
+    tree.append(
+      rootHeader,
+    );
+
+
+    const rootDocuments = state.documents.filter(
+      (documentItem) => (
+        documentItem.category_id === null
+      ),
+    );
+
+    for (
+      const documentItem
+      of rootDocuments
+    ) {
+      tree.append(
+        createDocumentRow(
+          documentItem,
+        ),
+      );
+    }
+
+
+    const rootCategories = state.categories.filter(
+      (category) => (
+        category.parent_id === null
+      ),
+    );
+
+    for (const category of rootCategories) {
+      tree.append(
+        createCategoryNode(
+          category,
+        ),
+      );
+    }
+
+
+    if (
+      state.documents.length === 0
+      && state.categories.length === 0
+    ) {
+      const empty = document.createElement(
+        "p",
+      );
+
+      empty.className = (
+        "normative-sidebar__empty"
+      );
+
+      empty.textContent = (
+        "В разделе пока нет папок и документов."
+      );
+
+      tree.append(
+        empty,
+      );
+    }
+  }
+
+
+  function clearPolling() {
+    if (state.pollTimer !== null) {
+      window.clearTimeout(
+        state.pollTimer,
+      );
+
+      state.pollTimer = null;
+    }
+  }
+
+
+  function schedulePolling() {
+    clearPolling();
+
+    const requiresPolling = (
+      state.documents.some(
+        isIndexing,
+      )
+      || state.atomicReadiness?.documents?.some((item) => ["queued", "building"].includes(item.atomic_state))
+    );
+
+    if (!requiresPolling) {
+      return;
+    }
+
+    state.pollTimer = window.setTimeout(
+      async () => {
+        try {
+          await refreshSectionData(
+            true,
+          );
+
+        } catch (error) {
+          setStatus(
+            error instanceof Error
+              ? error.message
+              : String(error),
+            "error",
+          );
+        }
+      },
+      NORMATIVE_POLL_INTERVAL_MS,
+    );
+  }
+
+
+  async function refreshSectionData(
+    silent = true,
+  ) {
+    if (!state.sectionId || selectedSectionDeleting()) {
+      state.categories = [];
+
+      state.documents = [];
+      state.atomicReadiness = null;
+
+      pruneSelection();
+
+      renderTree();
+
+      return;
+    }
+
+    const generation = state.generation;
+    const atomicGeneration = ++state.atomicGeneration;
+    const sectionId = state.sectionId;
+    let baseReady = false;
+    let readiness = null;
+    // Дополнительная сводка не задерживает основной каталог и доступность формы.
+    if (diagnosticsVisible) atomicReadiness(sectionId)
+      .catch((error) => ({ error: error.message }))
+      .then((result) => {
+        readiness = result;
+        if (!baseReady || generation !== state.generation || atomicGeneration !== state.atomicGeneration) return;
+        state.atomicReadiness = result;
+        renderTree();
+        schedulePolling();
+      });
+    const [
+      categories,
+      documents,
+    ] = await Promise.all(
+      [
+        listCategories(
+          state.sectionId,
+        ),
+
+        listDocuments(
+          state.sectionId,
+        ),
+      ],
+    );
+
+    if (generation !== state.generation) return;
+    state.categories = categories;
+
+    state.documents = documents;
+    baseReady = true;
+    state.atomicReadiness = diagnosticsVisible && atomicGeneration === state.atomicGeneration ? readiness : null;
+
+    selectNewReadyDocumentsByDefault();
+
+    renderTree();
+
+    schedulePolling();
+
+    if (!silent) {
+      setStatus(
+        "Нормативный каталог обновлён.",
+      );
+    }
+  }
+
+
+  async function reloadSections(
+    preferredSectionId = null,
+  ) {
+    const generation = ++state.generation;
+    clearPolling();
+    const sections = await listSections();
+    if (generation !== state.generation) return;
+    state.sections = sections;
+
+    state.sectionId = retainSectionSelection(
+      state.sections,
+      state.sectionId,
+      preferredSectionId,
+    );
+
+    renderSectionSelect();
+
+    await onSectionChange(
+      selectedSectionDeleting() ? null : state.sectionId,
+    );
+
+    if (generation !== state.generation) return;
+    await refreshSectionData(
+      true,
+    );
+  }
+
+
+  async function runAction(
+    action,
+    successMessage,
+  ) {
+    try {
+      setStatus(
+        "Выполняется…",
+      );
+
+      await action();
+
+      if (successMessage) {
+        setStatus(
+          successMessage,
+        );
+      }
+
+    } catch (error) {
+      setStatus(
+        error instanceof Error
+          ? error.message
+          : String(error),
+        "error",
+      );
+    }
+  }
+
+
+  async function uploadFiles(
+    files,
+    categoryId = null,
+  ) {
+    if (!state.sectionId || selectedSectionDeleting()) {
+      setStatus(
+        "Сначала выберите нормативный раздел.",
+        "error",
+      );
+
+      return;
+    }
+
+    const normativeFiles = (
+      normalizeNormativeFiles(
+        files,
+      )
+    );
+
+    if (!normativeFiles.length) {
+      setStatus(
+        "Поддерживаются PDF, DOC и DOCX.",
+        "error",
+      );
+
+      return;
+    }
+
+    const failures = [];
+
+    for (const file of normativeFiles) {
+      try {
+        setStatus(
+          `Загружаем ${file.name}…`,
+        );
+
+        const documentItem = await uploadDocument(
+          state.sectionId,
+          {
+            file,
+            categoryId,
+          },
+        );
+
+        try {
+          await queueDocument(
+            documentItem.document_id,
+          );
+
+        } catch (error) {
+          failures.push(
+            `${file.name}: ${
+              error instanceof Error
+                ? error.message
+                : String(error)
+            }`,
+          );
+        }
+
+      } catch (error) {
+        failures.push(
+          `${file.name}: ${
+            error instanceof Error
+              ? error.message
+              : String(error)
+          }`,
+        );
+      }
+    }
+
+    await refreshSectionData(
+      true,
+    );
+
+    if (failures.length) {
+      setStatus(
+        failures.join(
+          " | ",
+        ),
+        "error",
+      );
+
+      return;
+    }
+
+    setStatus(
+      "Документы загружены и поставлены "
+      + "в очередь индексации.",
+    );
+  }
+
+
+  async function handleDrop(
+    event,
+    categoryId,
+  ) {
+    const files = normalizeNormativeFiles(
+      event.dataTransfer?.files
+      || [],
+    );
+
+    if (files.length) {
+      await uploadFiles(
+        files,
+        categoryId,
+      );
+
+      return;
+    }
+
+    const documentId = (
+      event.dataTransfer?.getData(
+        DOCUMENT_DRAG_TYPE,
+      )
+      || ""
+    );
+
+    if (!documentId) {
+      return;
+    }
+
+    await runAction(
+      async () => {
+        await moveDocument(
+          documentId,
+          categoryId,
+        );
+
+        await refreshSectionData(
+          false,
+        );
+      },
+      "Документ перемещён.",
+    );
+  }
+
+
+  async function createCategoryInteractive(
+    parentId = null,
+  ) {
+    if (!state.sectionId || selectedSectionDeleting()) {
+      return;
+    }
+
+    const name = window.prompt(
+      parentId
+        ? "Название вложенной папки:"
+        : "Название папки:",
+    );
+
+    if (
+      name === null
+      || !name.trim()
+    ) {
+      return;
+    }
+
+    await runAction(
+      async () => {
+        await createCategory(
+          state.sectionId,
+          {
+            name: name.trim(),
+            parentId,
+          },
+        );
+
+        await refreshSectionData(
+          false,
+        );
+      },
+      "Папка создана.",
+    );
+  }
+
+
+  function bindSectionControls() {
+    sectionSelect.addEventListener(
+      "change",
+      async () => {
+        state.generation += 1;
+        clearPolling();
+        state.categories = [];
+        state.documents = [];
+        state.sectionId = (
+          sectionSelect.value
+          || null
+        );
+
+        await runAction(
+          async () => {
+            renderSectionSelect();
+            await onSectionChange(
+              selectedSectionDeleting() ? null : state.sectionId,
+            );
+
+            await refreshSectionData(
+              true,
+            );
+          },
+          "Раздел загружен.",
+        );
+      },
+    );
+
+
+    createSectionButton.addEventListener(
+      "click",
+      async () => {
+        const name = window.prompt(
+          "Название нового нормативного раздела:",
+        );
+
+        if (
+          name === null
+          || !name.trim()
+        ) {
+          return;
+        }
+
+        await runAction(
+          async () => {
+            const section = await createSection(
+              name.trim(),
+            );
+
+            await reloadSections(
+              section.section_id,
+            );
+          },
+          "Раздел создан.",
+        );
+      },
+    );
+
+
+    renameSectionButton.addEventListener(
+      "click",
+      async () => {
+        const section = state.sections.find(
+          (item) => (
+            item.section_id
+            === state.sectionId
+          ),
+        );
+
+        if (!section) {
+          return;
+        }
+
+        const name = window.prompt(
+          "Новое название раздела:",
+          section.name,
+        );
+
+        if (
+          name === null
+          || !name.trim()
+          || name.trim() === section.name
+        ) {
+          return;
+        }
+
+        await runAction(
+          async () => {
+            await updateSection(
+              section.section_id,
+              {
+                name: name.trim(),
+              },
+            );
+
+            await reloadSections(
+              section.section_id,
+            );
+          },
+          "Раздел переименован.",
+        );
+      },
+    );
+
+
+    deleteSectionButton.addEventListener(
+      "click",
+      async () => {
+        const section = state.sections.find(
+          (item) => (
+            item.section_id
+            === state.sectionId
+          ),
+        );
+
+        if (!section) {
+          return;
+        }
+
+        const confirmed = window.confirm(
+          (
+            `Удалить раздел "${section.name}"? `
+            + "Будут удалены все нормативные документы и личные пакеты пользователей в этом разделе, исходные файлы, PDF предпросмотры и поисковый индекс. Действие необратимо."
+          ),
+        );
+
+        if (!confirmed) {
+          return;
+        }
+
+        await runAction(
+          async () => {
+            state.generation += 1;
+            clearPolling();
+            section.deleting = true;
+            renderSectionSelect();
+            await onSectionChange(null);
+            await refreshSectionData(true);
+            try {
+              await deleteSection(section.section_id);
+            } catch (error) {
+              // Сервер сохраняет tombstone после начала удаления; перечитываем его
+              // и оставляем доступной кнопку повторного DELETE.
+              await reloadSections(section.section_id);
+              throw error;
+            }
+
+            state.selectedBySection.delete(
+              section.section_id,
+            );
+
+            state.readySeenBySection.delete(
+              section.section_id,
+            );
+
+            state.sectionId = null;
+
+            await reloadSections();
+          },
+          "Раздел удалён.",
+        );
+      },
+    );
+  }
+
+
+  function bindSelectionControls() {
+    selectAllButton.addEventListener(
+      "click",
+      () => {
+        const selected = selectedSet();
+
+        for (
+          const documentItem
+          of state.documents
+        ) {
+          if (
+            isReady(
+              documentItem,
+            )
+          ) {
+            selected.add(
+              documentItem.document_id,
+            );
+          }
+        }
+
+        renderTree();
+
+        setStatus(
+          "Выбраны все готовые документы раздела.",
+        );
+      },
+    );
+
+
+    clearSelectionButton.addEventListener(
+      "click",
+      () => {
+        selectedSet().clear();
+
+        renderTree();
+
+        setStatus(
+          "Выбор документов очищен.",
+        );
+      },
+    );
+
+
+    createCategoryButton.addEventListener(
+      "click",
+      async () => {
+        await createCategoryInteractive(
+          null,
+        );
+      },
+    );
+  }
+
+
+  function bindUploadControls() {
+    fileInput.addEventListener(
+      "change",
+      async () => {
+        await uploadFiles(
+          fileInput.files,
+          null,
+        );
+
+        fileInput.value = "";
+      },
+    );
+
+
+    uploadZone.addEventListener(
+      "click",
+      () => {
+        if (!fileInput.disabled) {
+          fileInput.click();
+        }
+      },
+    );
+
+
+    uploadZone.addEventListener(
+      "keydown",
+      (event) => {
+        if (
+          event.key === "Enter"
+          || event.key === " "
+        ) {
+          event.preventDefault();
+
+          if (!fileInput.disabled) {
+            fileInput.click();
+          }
+        }
+      },
+    );
+
+
+    uploadZone.addEventListener(
+      "dragover",
+      (event) => {
+        event.preventDefault();
+
+        if (event.dataTransfer) {
+          event.dataTransfer.dropEffect = (
+            "copy"
+          );
+        }
+      },
+    );
+
+
+    uploadZone.addEventListener(
+      "drop",
+      async (event) => {
+        event.preventDefault();
+
+        await handleDrop(
+          event,
+          null,
+        );
+      },
+    );
+  }
+
+
+  async function start() {
+    bindSectionControls();
+
+    bindSelectionControls();
+
+    bindUploadControls();
+
+    try {
+      setStatus(
+        "Загружаем нормативный каталог…",
+      );
+
+      await reloadSections();
+
+      setStatus(
+        state.sectionId
+          ? "Нормативный каталог готов."
+          : state.sections.length
+            ? "Выберите раздел проектной документации."
+            : "Нет доступных разделов. Для запуска анализа нужен выбранный раздел.",
+      );
+
+    } catch (error) {
+      setStatus(
+        error instanceof Error
+          ? error.message
+          : String(error),
+        "error",
+      );
+    }
+  }
+
+
+  function getSelection() {
+    if (!state.sectionId) {
+      return null;
+    }
+
+    const selected = selectedSet();
+
+    return {
+      sectionId: state.sectionId,
+      deleting: selectedSectionDeleting(),
+
+      documentIds: state.documents
+        .filter(
+          (documentItem) => (
+            isReady(
+              documentItem,
+            )
+            && selected.has(
+              documentItem.document_id,
+            )
+          ),
+        )
+        .map(
+          (documentItem) => (
+            documentItem.document_id
+          ),
+        ),
+    };
+  }
+
+
+  const unsubscribe = subscribe(() => {
+    const visible = isAdmin(getSession());
+    if (visible === diagnosticsVisible) return;
+    diagnosticsVisible = visible;
+    state.atomicReadiness = null;
+    state.atomicGeneration += 1;
+    renderTree();
+    if (visible && state.sectionId) void refreshSectionData().catch(() => {});
+  });
+
+  return {
+    getSelection,
+    reload: reloadSections,
+    start,
+    dispose() { unsubscribe(); window.clearTimeout(state.pollTimer); },
+  };
+}

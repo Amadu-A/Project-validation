@@ -1,0 +1,244 @@
+{
+  "schema": "pdrd-human-remarks-semantic/v2",
+  "section": "ТМ.Котельная",
+  "reference_origin": "non_human_review_accepted_by_user",
+  "reference_note": "Исходные замечания сформированы не человеком; пользователь подтвердил их корректность. Поле human_remark оставлено для совместимости с предыдущими матрицами.",
+  "source": {
+    "pdf_filename": "ИОС 4.1.7(1).pdf",
+    "sha256": "4cd0e6259acdd82367286668add586dbb0d517b77b05ef5124a8c73ad05a89e9",
+    "pdf_pages": 1,
+    "source_drawing_code": "120/155-16-ИОС4.1.7-ГЧ",
+    "drawing_title": "Принципиальная схема топливоснабжения",
+    "list_number": 4,
+    "original_document_page": 22,
+    "remarks_count": 4
+  },
+  "coordinate_system": {
+    "units": "normalized_0_1000",
+    "origin": "top_left",
+    "bbox_format": "[x0, y0, x1, y1]",
+    "remark": "Прямоугольник выноски с текстом замечания (не местоположение ошибки).",
+    "mistake": "Точные прямоугольники текстовых вхождений позиционных обозначений на схеме; пространственный ориентир, не требование точного совпадения."
+  },
+  "context_used_semantics": "True означает, что для оценки требуются другие листы; здесь все пары/тройки обозначений находятся на одной схеме, поэтому False.",
+  "matching_policy": {
+    "method": "semantic_and_page",
+    "require_exact_text": false,
+    "require_exact_coordinates": false,
+    "require_exact_status": false,
+    "full_match": "Система выявила повторное позиционное обозначение того же номера на данном листе и указала, что требуется проверить несколько разных элементов/мест схемы.",
+    "partial_match": "Система распознала повторную маркировку на данном листе, но не указала нужный номер позиции или не привела сопоставимые места на схеме.",
+    "not_matched": "Отсутствует замечание о повторе указанной позиции или речь идёт о другом маркировочном обозначении.",
+    "geometry": "Различие bbox допустимо. Проверять источник на листе 4 и расположения подписей, а не буквальное равенство координат.",
+    "scoring": "Четыре независимых семантических кейса; каждый имеет собственный номер 8.5.4, 8.9.1, 8.9.2, 8.9.3. Не считать прямоугольники и стрелки отдельными замечаниями.",
+    "status_policy": "Исходное значение «Требует проверки инженером» не должно мешать смысловому совпадению. Принятость пользователем является статусом тестового эталона, а не нормативным подтверждением."
+  },
+  "items": [
+    {
+      "id": "TM-KOT-01",
+      "list_number": 4,
+      "pdf_page": 1,
+      "human_remark": "Проверить повторное позиционное обозначение 8.5.4.",
+      "context_used": false,
+      "context_pages": [],
+      "coords": {
+        "remark": {
+          "bbox": [
+            284.2,
+            612.8,
+            506.6,
+            747.3
+          ]
+        },
+        "mistake": [
+          {
+            "pdf_page": 1,
+            "bbox": [
+              652.7,
+              367.9,
+              672.4,
+              388.6
+            ]
+          },
+          {
+            "pdf_page": 1,
+            "bbox": [
+              640.4,
+              544.2,
+              660.0,
+              564.9
+            ]
+          },
+          {
+            "pdf_page": 1,
+            "bbox": [
+              534.3,
+              551.7,
+              553.9,
+              572.4
+            ]
+          }
+        ]
+      },
+      "semantic_target": "Выявить повторное использование позиционного обозначения 8.5.4 для 3 расположений элементов на принципиальной схеме топливоснабжения; проверить идентичность объектов, а не только текстовые вхождения.",
+      "remark_type": "duplicate_position_marking",
+      "issue_group": "duplicate_position_8_5_4",
+      "source_remark_number": 11,
+      "annotation_xref": 52,
+      "evidence_annotation_xrefs": [
+        40,
+        42,
+        44
+      ],
+      "observed_source_label_occurrences": 3,
+      "reference_acceptance": "accepted_by_user"
+    },
+    {
+      "id": "TM-KOT-02",
+      "list_number": 4,
+      "pdf_page": 1,
+      "human_remark": "Проверить повторное позиционное обозначение 8.9.1.",
+      "context_used": false,
+      "context_pages": [],
+      "coords": {
+        "remark": {
+          "bbox": [
+            10.7,
+            15.1,
+            233.1,
+            149.6
+          ]
+        },
+        "mistake": [
+          {
+            "pdf_page": 1,
+            "bbox": [
+              847.9,
+              232.7,
+              866.3,
+              253.3
+            ]
+          },
+          {
+            "pdf_page": 1,
+            "bbox": [
+              641.0,
+              430.1,
+              659.5,
+              450.8
+            ]
+          }
+        ]
+      },
+      "semantic_target": "Выявить повторное использование позиционного обозначения 8.9.1 для 2 расположений элементов на принципиальной схеме топливоснабжения; проверить идентичность объектов, а не только текстовые вхождения.",
+      "remark_type": "duplicate_position_marking",
+      "issue_group": "duplicate_position_8_9_1",
+      "source_remark_number": 12,
+      "annotation_xref": 76,
+      "evidence_annotation_xrefs": [
+        68,
+        70
+      ],
+      "observed_source_label_occurrences": 2,
+      "reference_acceptance": "accepted_by_user"
+    },
+    {
+      "id": "TM-KOT-03",
+      "list_number": 4,
+      "pdf_page": 1,
+      "human_remark": "Проверить повторное позиционное обозначение 8.9.2.",
+      "context_used": false,
+      "context_pages": [],
+      "coords": {
+        "remark": {
+          "bbox": [
+            720.6,
+            15.1,
+            942.9,
+            149.6
+          ]
+        },
+        "mistake": [
+          {
+            "pdf_page": 1,
+            "bbox": [
+              847.3,
+              348.2,
+              867.6,
+              368.9
+            ]
+          },
+          {
+            "pdf_page": 1,
+            "bbox": [
+              660.4,
+              617.0,
+              680.6,
+              637.6
+            ]
+          }
+        ]
+      },
+      "semantic_target": "Выявить повторное использование позиционного обозначения 8.9.2 для 2 расположений элементов на принципиальной схеме топливоснабжения; проверить идентичность объектов, а не только текстовые вхождения.",
+      "remark_type": "duplicate_position_marking",
+      "issue_group": "duplicate_position_8_9_2",
+      "source_remark_number": 13,
+      "annotation_xref": 93,
+      "evidence_annotation_xrefs": [
+        85,
+        87
+      ],
+      "observed_source_label_occurrences": 2,
+      "reference_acceptance": "accepted_by_user"
+    },
+    {
+      "id": "TM-KOT-04",
+      "list_number": 4,
+      "pdf_page": 1,
+      "human_remark": "Проверить повторное позиционное обозначение 8.9.3.",
+      "context_used": false,
+      "context_pages": [],
+      "coords": {
+        "remark": {
+          "bbox": [
+            10.7,
+            479.0,
+            233.1,
+            613.4
+          ]
+        },
+        "mistake": [
+          {
+            "pdf_page": 1,
+            "bbox": [
+              415.3,
+              222.5,
+              435.0,
+              243.2
+            ]
+          },
+          {
+            "pdf_page": 1,
+            "bbox": [
+              845.2,
+              453.2,
+              864.9,
+              473.9
+            ]
+          }
+        ]
+      },
+      "semantic_target": "Выявить повторное использование позиционного обозначения 8.9.3 для 2 расположений элементов на принципиальной схеме топливоснабжения; проверить идентичность объектов, а не только текстовые вхождения.",
+      "remark_type": "duplicate_position_marking",
+      "issue_group": "duplicate_position_8_9_3",
+      "source_remark_number": 14,
+      "annotation_xref": 110,
+      "evidence_annotation_xrefs": [
+        102,
+        104
+      ],
+      "observed_source_label_occurrences": 2,
+      "reference_acceptance": "accepted_by_user"
+    }
+  ]
+}

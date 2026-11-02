@@ -1,0 +1,1379 @@
+// frontend/src/js/features/analysis/report.js
+
+/**
+ * Строит безопасное DOM-представление результата анализа.
+ *
+ * Пользовательские и модельные строки вставляются только через textContent.
+ * Ссылки N, T и U открывают сохранённый PDF или его предварительный просмотр
+ * на физической странице источника.
+ */
+
+import { findingSourceDescription, preferredSourceArray, findingPageLabel, findingPages, focusDocumentEvidence, equipmentSnapshotUrl, normativeRequirementDescription } from "./finding-provenance.js";
+import { mountFindingList, CATEGORY_LABELS, SEVERITY_LABELS, DECISION_LABELS } from "./finding-list.js";
+import {
+  sourceModeLabel,
+  statusLabel,
+} from "./labels.js";
+
+import {
+  appendAnalysisVisualization,
+} from "./visualization.js";
+import { openTechnicalAssignmentCitation } from "../technical_assignment/citation.js";
+import { appendEquipmentReport } from "./equipment-report.js";
+import { normativeCoverageText } from "./normative-coverage.js";
+
+
+function createElement(
+  tagName,
+  className = "",
+  text = null,
+) {
+  const node = document.createElement(
+    tagName,
+  );
+
+  if (className) {
+    node.className = className;
+  }
+
+  if (
+    text !== null
+    && text !== undefined
+  ) {
+    node.textContent = String(
+      text,
+    );
+  }
+
+  return node;
+}
+
+
+function appendMetaItem(
+  list,
+  label,
+  value,
+  {
+    code = false,
+  } = {},
+) {
+  if (
+    value === null
+    || value === undefined
+    || value === ""
+  ) {
+    return;
+  }
+
+  const item = createElement(
+    "div",
+    "analysis-result__meta-item",
+  );
+
+  const term = createElement(
+    "dt",
+    "analysis-result__meta-label",
+    label,
+  );
+
+  const description = createElement(
+    "dd",
+    "analysis-result__meta-value",
+  );
+
+  if (code) {
+    description.append(
+      createElement(
+        "code",
+        "analysis-result__job-id",
+        value,
+      ),
+    );
+
+  } else {
+    description.textContent = String(
+      value,
+    );
+  }
+
+  item.append(
+    term,
+    description,
+  );
+
+  list.append(
+    item,
+  );
+}
+
+
+function appendTextBlock(
+  parent,
+  label,
+  value,
+) {
+  if (
+    value === null
+    || value === undefined
+    || value === ""
+  ) {
+    return;
+  }
+
+  const block = createElement(
+    "div",
+    "analysis-result__field",
+  );
+
+  block.append(
+    createElement(
+      "strong",
+      "analysis-result__field-label",
+      label,
+    ),
+  );
+
+  const content = createElement("p", "analysis-result__field-value", value);
+  block.append(content);
+
+  parent.append(
+    block,
+  );
+  return content;
+}
+
+
+function normalizePage(
+  value,
+) {
+  if (
+    typeof value === "number"
+    && Number.isInteger(
+      value,
+    )
+    && value >= 1
+  ) {
+    return value;
+  }
+
+  if (
+    typeof value === "string"
+    && /^\d+$/.test(
+      value.trim(),
+    )
+  ) {
+    const page = Number.parseInt(
+      value,
+      10,
+    );
+
+    if (page >= 1) {
+      return page;
+    }
+  }
+
+  return null;
+}
+
+
+function sourceFileName(
+  source,
+  fallback,
+) {
+  return (
+    source.source_file
+    || source.file_name
+    || source.source
+    || fallback
+  );
+}
+
+
+function uniqueSources(
+  sources,
+) {
+  if (!Array.isArray(
+    sources,
+  )) {
+    return [];
+  }
+
+  const seen = new Set();
+
+  return sources.filter(
+    (source) => {
+      if (
+        !source
+        || typeof source !== "object"
+      ) {
+        return false;
+      }
+
+      const key = [
+        source.document_id
+          || source.technical_assignment_id
+          || "",
+        source.page ?? "",
+        source.point_id || "",
+        source.source_file || "",
+      ].join(
+        ":",
+      );
+
+      if (seen.has(
+        key,
+      )) {
+        return false;
+      }
+
+      seen.add(
+        key,
+      );
+
+      return true;
+    },
+  );
+}
+
+
+/** Возвращает неповторяющиеся сохранённые нормативные основания. */
+export function normativeSources(
+  finding,
+) {
+  return uniqueSources(
+    preferredSourceArray(
+      finding.basis_sources,
+      finding.normative_sources,
+    ),
+  );
+}
+
+
+/** Возвращает сохранённые требования ТЗ с непустым резервным массивом. */
+function technicalAssignmentSources(
+  finding,
+) {
+  return uniqueSources(
+    preferredSourceArray(
+      finding.technical_assignment_basis_sources,
+      finding.technical_assignment_sources,
+    ),
+  );
+}
+
+
+/** Возвращает сохранённые пользовательские источники без повторов. */
+function userPackageSources(
+  finding,
+) {
+  return uniqueSources(
+    preferredSourceArray(
+      finding.user_package_basis_sources,
+      finding.user_package_sources,
+    ),
+  );
+}
+
+
+/** Строит адрес известного маршрута только при наличии идентификатора и физической страницы. */
+function managedCitationUrl(
+  source,
+  pathPrefix,
+) {
+  const documentId = (
+    typeof source.document_id === "string"
+      ? source.document_id.trim()
+      : ""
+  );
+
+  const page = normalizePage(
+    source.page
+    ?? source.page_number,
+  );
+
+  if (
+    !documentId
+    || page === null
+  ) {
+    return null;
+  }
+
+  return (
+    pathPrefix
+    + `${encodeURIComponent(documentId)}`
+    + `/content#page=${page}`
+  );
+}
+
+
+function technicalAssignmentCitationTarget(
+  source,
+) {
+  const technicalAssignmentId = (
+    typeof source.technical_assignment_id === "string"
+      ? source.technical_assignment_id.trim()
+      : ""
+  );
+
+  const page = normalizePage(
+    source.page
+    ?? source.page_number,
+  );
+
+  if (
+    !technicalAssignmentId
+    || page === null
+  ) {
+    return null;
+  }
+
+  return { id: technicalAssignmentId, page };
+}
+
+
+function createManagedCitation(
+  source,
+  {
+    fallbackName,
+    pathPrefix,
+    datasetName,
+    titlePrefix,
+  },
+) {
+  const fileName = sourceFileName(
+    source,
+    fallbackName,
+  );
+
+  const page = normalizePage(
+    source.page
+    ?? source.page_number,
+  );
+
+  const label = (
+    page === null
+      ? fileName
+      : `${fileName}, стр. ${page}`
+  );
+
+  const url = managedCitationUrl(
+    source,
+    pathPrefix,
+  );
+
+  if (!url) {
+    return createElement(
+      "span",
+      "analysis-result__source-text",
+      label,
+    );
+  }
+
+  const link = createElement(
+    "a",
+    "analysis-result__source-link",
+    label,
+  );
+
+  link.href = url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+
+  if (datasetName === "normativeCitation") {
+    link.dataset.normativeCitation = "";
+  }
+
+  if (datasetName === "userPackageCitation") {
+    link.dataset.userPackageCitation = "";
+  }
+
+  link.dataset.documentId = source.document_id;
+  link.dataset.page = String(
+    page,
+  );
+
+  link.title = (
+    `${titlePrefix} на странице ${page}`
+  );
+
+  return link;
+}
+
+
+/** Создаёт ссылку на нормативный PDF либо текст при отсутствии адреса. */
+export function createNormativeCitation(
+  source,
+) {
+  const citation = createManagedCitation(
+    source,
+    {
+      fallbackName: "Нормативный источник",
+      pathPrefix: "/api/v1/normative/documents/",
+      datasetName: "normativeCitation",
+      titlePrefix: "Открыть нормативный документ",
+    },
+  );
+  const details = normativeRequirementDescription(source);
+  if (details) {
+    citation.textContent += ` · ${details}`;
+    citation.title = [citation.title, source.atomic_requirement.source_text || source.text].filter(Boolean).join("\n");
+  }
+  return citation;
+}
+
+
+/** Открывает ТЗ через существующий защищённый просмотр; без идентификатора возвращает текст. */
+function createTechnicalAssignmentCitation(
+  source,
+) {
+  const fileName = sourceFileName(
+    source,
+    "Техническое задание",
+  );
+
+  const page = normalizePage(
+    source.page
+    ?? source.page_number,
+  );
+
+  const label = (
+    page === null
+      ? fileName
+      : `${fileName}, стр. ${page}`
+  );
+
+  const target = technicalAssignmentCitationTarget(
+    source,
+  );
+
+  if (!target) {
+    return createElement(
+      "span",
+      "analysis-result__source-text",
+      label,
+    );
+  }
+
+  const link = createElement(
+    "a",
+    "analysis-result__source-link",
+    label,
+  );
+
+  link.href = "#";
+  link.addEventListener("click", async (event) => {
+    event.preventDefault();
+    try {
+      await openTechnicalAssignmentCitation(target.id, target.page);
+    } catch (error) {
+      link.textContent = `${label} · не удалось открыть ТЗ`;
+      link.title = error.detail ?? error.message ?? "Не удалось открыть ТЗ.";
+    }
+  });
+
+  link.dataset.technicalAssignmentCitation = "";
+  link.dataset.technicalAssignmentId = (
+    source.technical_assignment_id
+  );
+  link.dataset.page = String(
+    page,
+  );
+
+  link.title = (
+    `Открыть техническое задание на странице ${page}`
+  );
+
+  return link;
+}
+
+
+/** Создаёт ссылку на сохранённый пользовательский документ либо текст. */
+function createUserPackageCitation(
+  source,
+) {
+  return createManagedCitation(
+    source,
+    {
+      fallbackName: "Пользовательский документ",
+      pathPrefix: (
+        "/api/v1/normative/"
+        + "user-packages/documents/"
+      ),
+      datasetName: "userPackageCitation",
+      titlePrefix: "Открыть пользовательский документ",
+    },
+  );
+}
+
+
+function appendSourceList(
+  parent,
+  label,
+  sources,
+  createCitation,
+) {
+  if (!sources.length) {
+    return;
+  }
+
+  const section = createElement(
+    "div",
+    "analysis-result__sources",
+  );
+
+  section.append(
+    createElement(
+      "strong",
+      "analysis-result__field-label",
+      label,
+    ),
+  );
+
+  const list = createElement(
+    "ul",
+    "analysis-result__source-list",
+  );
+
+  sources.forEach(
+    (source) => {
+      const item = createElement(
+        "li",
+        "analysis-result__source-item",
+      );
+
+      item.append(
+        createCitation(
+          source,
+        ),
+      );
+
+      list.append(
+        item,
+      );
+    },
+  );
+
+  section.append(
+    list,
+  );
+
+  parent.append(
+    section,
+  );
+}
+
+
+function appendNormativeSources(
+  finding,
+  parent,
+) {
+  appendSourceList(
+    parent,
+    "Нормативные источники",
+    normativeSources(
+      finding,
+    ),
+    createNormativeCitation,
+  );
+}
+
+
+function appendTechnicalAssignmentSources(
+  finding,
+  parent,
+) {
+  appendSourceList(
+    parent,
+    "Требования технического задания",
+    technicalAssignmentSources(
+      finding,
+    ),
+    createTechnicalAssignmentCitation,
+  );
+}
+
+
+function appendUserPackageSources(
+  finding,
+  parent,
+) {
+  appendSourceList(
+    parent,
+    "Пользовательские требования / документы",
+    userPackageSources(
+      finding,
+    ),
+    createUserPackageCitation,
+  );
+}
+
+
+function appendProjectContextSources(
+  finding,
+  parent,
+) {
+  const sources = (
+    Array.isArray(
+      finding.project_context_sources,
+    )
+      ? finding.project_context_sources
+      : []
+  );
+
+  if (!sources.length) {
+    return;
+  }
+
+  const section = createElement(
+    "div",
+    "analysis-result__sources",
+  );
+
+  section.append(
+    createElement(
+      "strong",
+      "analysis-result__field-label",
+      "Контекст ПЗ",
+    ),
+  );
+
+  const list = createElement(
+    "ul",
+    "analysis-result__source-list",
+  );
+
+  sources.forEach(
+    (source) => {
+      const page = (
+        source.page
+        ?? "?"
+      );
+
+      const sourceId = (
+        source.source_id
+        || "PZ"
+      );
+
+      const score = (
+        source.score
+        ?? "?"
+      );
+
+      list.append(
+        createElement(
+          "li",
+          "analysis-result__source-item",
+          `${sourceId}, стр. ${page}, score=${score}`,
+        ),
+      );
+    },
+  );
+
+  section.append(
+    list,
+  );
+
+  parent.append(
+    section,
+  );
+}
+
+
+function appendFinding(
+  finding,
+  index,
+  defaultPage,
+  parent,
+  jobId,
+) {
+  const page = (
+    finding.page
+    ?? finding.page_number
+    ?? defaultPage
+    ?? 1
+  );
+
+  const comment = (
+    finding.comment
+    || finding.message
+    || finding.issue_text
+    || "Текст замечания не передан."
+  );
+
+  const recommendation = (
+    finding.recommendation
+    || finding.recommendation_draft
+    || "Не указана."
+  );
+
+  const article = createElement(
+    "article",
+    "analysis-result__finding",
+  );
+  article.dataset.findingId = String(finding.finding_id ?? "");
+  article.dataset.reviewPage = String(page);
+  article.dataset.reviewBasis = String(finding.basis ?? "");
+  article.dataset.findingReportCard = "";
+  article.dataset.findingCategory = String(finding.category || "other");
+  article.dataset.findingSeverity = String(finding.severity || "");
+  article.dataset.findingStatus = String(finding.status || "needs_review");
+  article.dataset.findingDiscoveryIndex = String(index);
+  article.dataset.reviewDecision = "pending";
+  article.classList.add("analysis-result__finding--pending");
+
+  const header = createElement(
+    "div",
+    "analysis-result__finding-header",
+  );
+
+  header.append(
+    createElement(
+      "h4",
+      "analysis-result__finding-title",
+      `№${index + 1} · ${findingPageLabel(finding, page)}`,
+    ),
+  );
+
+  const badges = createElement(
+    "div",
+    "analysis-result__badges",
+  );
+
+  badges.append(
+    createElement(
+      "span",
+      "analysis-result__badge",
+      statusLabel(
+        finding.status,
+      ),
+    ),
+  );
+
+  badges.append(
+    createElement(
+      "span",
+      "analysis-result__badge",
+      (
+        finding.severity === "error" && finding.status !== "confirmed" ? "Возможная ошибка" : SEVERITY_LABELS[
+          finding.severity
+        ]
+        || finding.severity
+        || "Уровень не указан"
+      ),
+    ),
+  );
+
+  header.append(
+    badges,
+  );
+
+  article.append(
+    header,
+  );
+
+  const decision = createElement("span", "analysis-result__badge", finding.status === "hypothesis"
+    ? "Гипотеза — не включена в Review" : DECISION_LABELS.pending);
+  decision.dataset.findingReviewLabel = ""; badges.append(decision);
+  const navigation = createElement("div", "analysis-result__finding-navigation");
+  const pages = findingPages(finding, page);
+  for (const number of pages) {
+    const link = createElement("a", "analysis-result__evidence-link", pages.length === 1 ? "Показать на листе" : `Показать на листе ${number}`);
+    link.href = `#analysis-page-${number}`; focusDocumentEvidence(link, finding.finding_id, number); navigation.append(link);
+  }
+  article.append(navigation);
+
+  appendTextBlock(
+    article,
+    "Категория",
+    (
+      CATEGORY_LABELS[
+        finding.category
+      ]
+      || finding.category
+      || "—"
+    ),
+  );
+
+  const reviewText = appendTextBlock(
+    article,
+    "Замечание",
+    comment,
+  );
+  reviewText.dataset.reviewText = "";
+
+  appendTextBlock(article, "Происхождение и подтверждение", findingSourceDescription(finding));
+
+  appendTextBlock(
+    article,
+    "Основание на листе",
+    finding.evidence,
+  );
+
+  const evidenceLocations = Array.isArray(finding.evidence_locations)
+    ? finding.evidence_locations : [];
+  if (evidenceLocations.length) {
+    const details = createElement("div", "analysis-result__evidence-pages");
+    details.append(createElement("strong", "", "Страницы доказательств:"));
+    evidenceLocations.forEach((location) => {
+      const pageNumber = Number(location?.page);
+      if (!Number.isInteger(pageNumber) || pageNumber < 1) return;
+      const link = createElement("a", "analysis-result__evidence-link");
+      link.href = "#analysis-page-" + pageNumber;
+      link.append(document.createTextNode(
+        "Страница " + pageNumber + ": " + String(location.text ?? "")
+      ));
+      focusDocumentEvidence(link, finding.finding_id, pageNumber);
+      details.append(link);
+    });
+    article.append(details);
+  }
+
+  const documentSources = Array.isArray(finding.document_context_basis_sources) ? finding.document_context_basis_sources : [];
+  if (documentSources.length) {
+    const details = createElement("details", "analysis-result__sources");
+    details.append(createElement("summary", "", `Контекст проверяемого PDF [D] (${documentSources.length})`));
+    for (const source of documentSources) {
+      const link = createElement("a", "analysis-result__evidence-link");
+      link.href = `#analysis-page-${source.page}`;
+      link.textContent = `${source.source_id} · Страница ${source.page}: ${source.evidence_text || source.text || ""}`;
+      focusDocumentEvidence(link, finding.finding_id, source.page);
+      details.append(link);
+    }
+    article.append(details);
+  }
+
+  const equipmentSources = Array.isArray(finding.equipment_documentation_basis_sources)
+    ? finding.equipment_documentation_basis_sources : [];
+  if (equipmentSources.length) {
+    const details = createElement("details", "analysis-result__sources");
+    details.append(createElement("summary", "", `Документация производителя [EQ] (${equipmentSources.length})`));
+    for (const source of equipmentSources) {
+      const row = createElement("div", "analysis-result__source-item");
+      const label = `${source.manufacturer || ""} ${source.model || ""} · ревизия ${source.document_revision || "не указана"} · стр. ${source.page || "?"} · ${source.trust_status || "unknown"}: ${source.snippet || ""}`;
+      const url = String(source.source_url || "");
+      if (/^https?:\/\//i.test(url)) {
+        const link = createElement("a", "analysis-result__source-link", label);
+        link.href = url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        row.append(link);
+      } else {
+        row.textContent = label;
+      }
+      details.append(row);
+      const snapshot = equipmentSnapshotUrl(jobId, source.source_id);
+      if (snapshot) {
+        const saved = createElement("a", "analysis-result__source-link", "Сохранённая копия документа");
+        saved.href = snapshot;
+        saved.target = "_blank";
+        saved.rel = "noopener noreferrer";
+        details.append(saved);
+      }
+    }
+    article.append(details);
+    const eq = finding.equipment_details ?? {};
+    appendTextBlock(
+      article, "Сопоставление оборудования",
+      `${eq.manufacturer || ""} ${eq.model || ""} ${eq.variant || ""} · ${eq.object_ref || ""}
+${eq.property_name || ""}: проект ${eq.project_value || ""} ${eq.project_unit || ""}; производитель ${eq.manufacturer_value || ""} ${eq.manufacturer_unit || ""}.`,
+    );
+  }
+
+  const reviewBasis = appendTextBlock(
+    article,
+    "Нормативное основание",
+    finding.basis || "Не указано.",
+  );
+  reviewBasis.dataset.reviewBasisText = "";
+
+  appendNormativeSources(
+    finding,
+    article,
+  );
+
+  appendTechnicalAssignmentSources(
+    finding,
+    article,
+  );
+
+  appendUserPackageSources(
+    finding,
+    article,
+  );
+
+  appendProjectContextSources(
+    finding,
+    article,
+  );
+
+  appendTextBlock(
+    article,
+    "Рекомендация",
+    recommendation,
+  );
+
+  const origins = Array.isArray(finding.origin_assertions)
+    ? finding.origin_assertions
+    : [];
+  if (origins.length) {
+    const details = createElement("details", "analysis-result__hypotheses is-hidden");
+    details.append(createElement(
+      "summary",
+      "analysis-result__hypotheses-summary",
+      `Исходные утверждения VLM (${origins.length})`,
+    ));
+    origins.forEach((origin, originIndex) => {
+      const item = createElement("div", "analysis-result__hypothesis");
+      item.append(createElement("strong", "", `${originIndex + 1}. ${origin.comment ?? ""}`));
+      appendTextBlock(item, "Основание", origin.evidence);
+      appendTextBlock(item, "N/T/U ID", [
+        ...(origin.normative_source_ids ?? []),
+        ...(origin.technical_assignment_source_ids ?? []),
+        ...(origin.user_package_source_ids ?? []),
+      ].join(", "));
+      appendTextBlock(item, "Области VLM", JSON.stringify(origin.visual_regions ?? []));
+      details.append(item);
+    });
+    article.append(details);
+  }
+
+  if (
+    finding.confidence !== null
+    && finding.confidence !== undefined
+  ) {
+    appendTextBlock(
+      article,
+      "Уверенность",
+      finding.confidence,
+    );
+  }
+
+  const feedback = createElement("p", "analysis-result__review-feedback"); feedback.dataset.reviewFeedback = "";
+  const history = createElement("details", "analysis-result__review-history");
+  history.append(createElement("summary", "", "История решений"));
+  const historyBody = createElement("div", "", "История решений появится после подключения Review.");
+  historyBody.dataset.reviewHistory = ""; history.append(historyBody); article.append(feedback, history);
+  parent.append(article);
+}
+
+
+function appendProjectContextSummary(
+  payload,
+  list,
+) {
+  const context = (
+    payload.explanatory_note_context
+  );
+
+  if (!context?.enabled) {
+    appendMetaItem(
+      list,
+      "Контекст ПЗ",
+      "Выключен",
+    );
+
+    return;
+  }
+
+  appendMetaItem(
+    list,
+    "Контекст ПЗ",
+    "Включён",
+  );
+
+  if (
+    context.start_page
+    && context.end_page
+  ) {
+    appendMetaItem(
+      list,
+      "Диапазон ПЗ",
+      `${context.start_page}-${context.end_page}`,
+    );
+  }
+
+  if (
+    context.pages_count !== null
+    && context.pages_count !== undefined
+  ) {
+    appendMetaItem(
+      list,
+      "Страниц ПЗ",
+      context.pages_count,
+    );
+  }
+
+  if (
+    context.indexed_chunks !== null
+    && context.indexed_chunks !== undefined
+  ) {
+    appendMetaItem(
+      list,
+      "Фрагментов ПЗ",
+      context.indexed_chunks,
+    );
+  }
+}
+
+
+function appendCadSummary(
+  payload,
+  list,
+) {
+  const cad = payload.cad;
+
+  if (!cad) {
+    return;
+  }
+
+  if (cad.original_file_name) {
+    appendMetaItem(
+      list,
+      "CAD",
+      cad.original_file_name,
+    );
+  }
+
+  if (
+    cad.original_format
+    || cad.normalized_format
+  ) {
+    appendMetaItem(
+      list,
+      "CAD-формат",
+      (
+        `${cad.original_format || "?"}`
+        + " → "
+        + `${cad.normalized_format || "?"}`
+      ),
+    );
+  }
+
+  if (cad.selected_layout) {
+    appendMetaItem(
+      list,
+      "CAD layout",
+      cad.selected_layout,
+    );
+  }
+}
+
+
+function appendOverview(
+  payload,
+  jobId,
+  parent,
+) {
+  const section = createElement(
+    "section",
+    "analysis-result__summary",
+  );
+
+  section.append(
+    createElement(
+      "h3",
+      "analysis-result__section-title",
+      "Сводка анализа",
+    ),
+  );
+
+  const list = createElement(
+    "dl",
+    "analysis-result__meta",
+  );
+
+  if (jobId) {
+    appendMetaItem(
+      list,
+      "Задание",
+      jobId,
+      {
+        code: true,
+      },
+    );
+  }
+
+  appendMetaItem(
+    list,
+    "Режим",
+    sourceModeLabel(
+      payload.source_mode,
+    ),
+  );
+
+  const pdfFileName = (
+    payload.pdf_file_name
+    || (
+      payload.source_mode === "pdf_only"
+        ? payload.file_name
+        : null
+    )
+  );
+
+  appendMetaItem(
+    list,
+    "PDF",
+    pdfFileName,
+  );
+
+  const cadFileName = (
+    payload.cad_file_name
+    || (
+      payload.source_mode === "cad_only"
+        ? payload.file_name
+        : null
+    )
+  );
+
+  appendMetaItem(
+    list,
+    "DWG/DXF",
+    cadFileName,
+  );
+
+  if (
+    Array.isArray(
+      payload.selected_pages,
+    )
+    && payload.selected_pages.length
+  ) {
+    appendMetaItem(
+      list,
+      "Страницы",
+      payload.selected_pages.join(
+        ", ",
+      ),
+    );
+  }
+
+  if (
+    payload.analyzed_pages !== null
+    && payload.analyzed_pages !== undefined
+  ) {
+    appendMetaItem(
+      list,
+      "Проанализировано листов",
+      payload.analyzed_pages,
+    );
+  }
+
+  appendMetaItem(
+    list,
+    "Замечаний",
+    payload.findings_count ?? 0,
+  );
+
+  if (payload.equipment_check?.enabled) {
+    const check = payload.equipment_check;
+    appendMetaItem(list, "Проверка оборудования", ["queued", "running"].includes(check.search_status)
+      ? "Продолжается в фоне" : check.status === "completed" ? "Завершена" : "Частично выполнена");
+    appendMetaItem(list, "Уникальных моделей оборудования", check.statistics?.unique_models ?? (Array.isArray(check.inventory) ? check.inventory.length : 0));
+  }
+
+  appendProjectContextSummary(
+    payload,
+    list,
+  );
+
+  appendCadSummary(
+    payload,
+    list,
+  );
+
+  if (
+    Array.isArray(
+      payload.pipeline,
+    )
+    && payload.pipeline.length
+  ) {
+    const pipeline = createElement("details", "analysis-result__pipeline");
+    pipeline.append(createElement("summary", "", "Этапы обработки (Pipeline)"));
+    const stages = createElement("ol");
+    for (const stage of payload.pipeline) stages.append(createElement("li", "", stage));
+    pipeline.append(stages);
+    const card = createElement("div", "analysis-result__meta-item");
+    card.append(createElement("dt", "", "Обработка"));
+    const value = createElement("dd"); value.append(pipeline); card.append(value);
+    list.append(card);
+  }
+
+  section.append(
+    list,
+  );
+
+  appendTextBlock(section, "Охват нормативной проверки", normativeCoverageText(payload));
+
+  if (payload.summary) {
+    appendTextBlock(
+      section,
+      "Итог",
+      payload.summary,
+    );
+  }
+
+  if (payload.equipment_check?.enabled) appendEquipmentReport(section, payload.equipment_check, { jobId });
+
+  parent.append(
+    section,
+  );
+}
+
+
+function appendFindings(
+  payload,
+  parent,
+  jobId,
+) {
+  const section = createElement(
+    "section",
+    "analysis-result__findings",
+  );
+
+  section.append(
+    createElement(
+      "h3",
+      "analysis-result__section-title",
+      "Замечания",
+    ),
+  );
+
+  const findings = (
+    Array.isArray(
+      payload.findings,
+    )
+      ? payload.findings
+      : []
+  );
+
+  const defaultPage = payload.page?.page_number ?? payload.selected_pages?.[0] ?? 1;
+  findings.forEach((finding, index) => appendFinding(finding, index, defaultPage, section, jobId));
+  mountFindingList(section);
+  parent.append(section);
+}
+
+
+function appendLimitations(
+  payload,
+  parent,
+) {
+  if (
+    !Array.isArray(
+      payload.limitations,
+    )
+    || !payload.limitations.length
+  ) {
+    return;
+  }
+
+  const section = createElement(
+    "section",
+    "analysis-result__limitations",
+  );
+
+  section.append(
+    createElement(
+      "h3",
+      "analysis-result__section-title",
+      "Ограничения текущего MVP",
+    ),
+  );
+
+  const list = createElement(
+    "ul",
+    "analysis-result__limitation-list",
+  );
+
+  payload.limitations.forEach(
+    (limitation) => {
+      list.append(
+        createElement(
+          "li",
+          "analysis-result__limitation",
+          limitation,
+        ),
+      );
+    },
+  );
+
+  section.append(
+    list,
+  );
+
+  parent.append(
+    section,
+  );
+}
+
+
+export function renderAnalysisReport(
+  payload,
+  {
+    jobId = null,
+    visualization = null,
+  } = {},
+) {
+  const fragment = (
+    document.createDocumentFragment()
+  );
+
+  if (payload.status !== "completed") {
+    fragment.append(
+      createElement(
+        "p",
+        "analysis-result__message",
+        (
+          jobId
+            ? (
+              `Задание: ${jobId}\n`
+              + JSON.stringify(
+                payload,
+                null,
+                2,
+              )
+            )
+            : JSON.stringify(
+              payload,
+              null,
+              2,
+            )
+        ),
+      ),
+    );
+
+    return fragment;
+  }
+
+  appendAnalysisVisualization(
+    payload,
+    visualization,
+    fragment,
+    {
+      normativeSources,
+      createNormativeCitation,
+      technicalAssignmentSources,
+      createTechnicalAssignmentCitation,
+      userPackageSources,
+      createUserPackageCitation,
+      equipmentSnapshotUrl: (sourceId) => equipmentSnapshotUrl(jobId, sourceId),
+    },
+  );
+
+  appendOverview(
+    payload,
+    jobId,
+    fragment,
+  );
+
+  appendFindings(
+    payload,
+    fragment,
+    jobId,
+  );
+
+  appendLimitations(
+    payload,
+    fragment,
+  );
+
+  return fragment;
+}

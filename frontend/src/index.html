@@ -1,0 +1,943 @@
+<!-- frontend/src/index.html -->
+
+<!--
+  Главная страница PDRD Validation.
+
+  Browser взаимодействует только с публичным API Gateway.
+  Sidebar управляет разделами, нормативами, пользовательскими
+  пакетами, prompt и selection.
+-->
+
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1"
+  >
+
+  <title>PDRD Validation</title>
+
+  <link
+    rel="stylesheet"
+    href="/css/style.css"
+  >
+
+  <script
+    type="module"
+    src="/js/app.js"
+    defer
+  ></script>
+</head>
+
+<body class="page">
+  <header class="site-header" data-site-header>
+    <a class="site-header__brand" href="/" aria-label="PDRD — анализ документов">
+      <span class="site-header__mark" aria-hidden="true">P</span>
+      <span>PDRD <small>Validation</small></span>
+    </a>
+    <nav class="site-header__nav" aria-label="Основная навигация">
+      <a href="/" aria-current="page">Анализ</a>
+      <a href="/account.html" data-account-link hidden>Личный кабинет</a>
+      <a href="/admin.html" data-admin-link hidden>Админка</a>
+    </nav>
+    <div class="site-header__actions">
+      <span class="site-header__identity" data-header-identity hidden></span>
+      <button type="button" data-open-login>Войти</button>
+      <button type="button" class="site-header__primary" data-open-register>Регистрация</button>
+      <button type="button" data-header-logout hidden>Выйти</button>
+    </div>
+  </header>
+  <main class="page__content">
+    <aside
+      class="normative-sidebar"
+      data-normative-sidebar
+      aria-labelledby="normativeTitle"
+    >
+      <div class="normative-sidebar__header">
+        <div>
+          <h2
+            id="normativeTitle"
+            class="normative-sidebar__title"
+          >
+            Нормативная база
+          </h2>
+
+          <p class="normative-sidebar__description">
+            Управление разделом и документами проверки.
+          </p>
+        </div>
+      </div>
+
+      <div
+        class="normative-sidebar__toolbar normative-sidebar__section-actions"
+        aria-label="Управление разделом"
+      >
+        <button
+          class="normative-sidebar__button"
+          data-normative-section-create
+          type="button"
+        >
+          + Раздел
+        </button>
+
+        <button
+          class="normative-sidebar__button"
+          data-normative-section-rename
+          type="button"
+        >
+          Переименовать
+        </button>
+
+        <button
+          class="normative-sidebar__button normative-sidebar__button--danger"
+          data-normative-section-delete
+          type="button"
+        >
+          Удалить
+        </button>
+      </div>
+
+      <div class="normative-sidebar__section-control">
+        <label
+          class="normative-sidebar__label"
+          for="normativeSection"
+        >
+          Раздел
+        </label>
+
+        <select
+          id="normativeSection"
+          class="normative-sidebar__select"
+          data-normative-section-select
+        ></select>
+      </div>
+
+      <section
+        class="normative-sidebar__block normative-sidebar__specification"
+        data-specification-placeholder
+        aria-disabled="true"
+      >
+        <div class="normative-sidebar__block-header">
+          <h3 class="normative-sidebar__block-title">
+            ТЗ
+          </h3>
+
+          <span
+            class="normative-sidebar__disabled-badge"
+            data-technical-assignment-badge
+          >
+            Пока недоступно
+          </span>
+        </div>
+
+        <div
+          class="normative-sidebar__upload normative-sidebar__technical-assignment-upload"
+          data-technical-assignment-upload-zone
+          data-disabled="true"
+          data-drag-over="false"
+          role="button"
+          tabindex="-1"
+          aria-disabled="true"
+          aria-label="Загрузить техническое задание"
+        >
+          <strong class="normative-sidebar__upload-title">
+            Добавить ТЗ
+          </strong>
+
+          <span class="normative-sidebar__upload-text">
+            PDF, DOC или DOCX.
+          </span>
+
+          <span class="normative-sidebar__upload-text">
+            Перетащите файл сюда или нажмите для выбора.
+          </span>
+
+          <div class="normative-sidebar__technical-assignment-file">
+            <span class="normative-sidebar__file-picker-name">
+              Файл не выбран
+            </span>
+
+            <button
+              class="normative-sidebar__clear-link"
+              data-technical-assignment-clear
+              type="button"
+              hidden
+            >
+              Очистить
+            </button>
+          </div>
+
+          <input
+            id="specificationFile"
+            class="normative-sidebar__file-input"
+            type="file"
+            accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            disabled
+            tabindex="-1"
+          >
+        </div>
+
+        <p class="normative-sidebar__block-hint">
+          Функциональность загрузки ТЗ будет подключена позже.
+        </p>
+      </section>
+
+      <section
+        class="normative-sidebar__block normative-sidebar__documents"
+        data-normative-documents-block
+      >
+        <details
+          class="normative-sidebar__accordion"
+          data-normative-documents-accordion
+          open
+        >
+          <summary class="normative-sidebar__accordion-summary">
+            <span class="normative-sidebar__block-title">
+              Нормативные документы
+            </span>
+
+            <span
+              class="normative-sidebar__accordion-indicator"
+              aria-hidden="true"
+            >
+              ▾
+            </span>
+          </summary>
+
+          <div class="normative-sidebar__accordion-content">
+            <div class="normative-sidebar__block-header">
+              <p class="normative-sidebar__block-hint">
+                Все готовые документы раздела автоматически
+                участвуют в анализе.
+              </p>
+
+              <button
+                class="normative-sidebar__button"
+                data-normative-category-create
+                type="button"
+              >
+                + Папка
+              </button>
+            </div>
+
+            <div
+              class="normative-sidebar__toolbar is-hidden"
+              data-normative-admin-selection
+              aria-label="Административный выбор нормативных документов"
+            >
+              <button
+                class="normative-sidebar__button"
+                data-normative-select-all
+                type="button"
+              >
+                Выбрать всё
+              </button>
+
+              <button
+                class="normative-sidebar__button"
+                data-normative-clear-all
+                type="button"
+              >
+                Очистить
+              </button>
+            </div>
+
+            <div
+              class="normative-sidebar__upload"
+              data-normative-upload-zone
+              data-disabled="false"
+              role="button"
+              tabindex="0"
+              aria-label="Загрузить нормативные документы"
+            >
+              <strong class="normative-sidebar__upload-title">
+                Добавить норматив
+              </strong>
+
+              <span class="normative-sidebar__upload-text">
+                PDF, DOC или DOCX.
+              </span>
+
+              <span class="normative-sidebar__upload-text">
+                Перетащите файлы сюда или нажмите для выбора.
+              </span>
+
+              <span class="normative-sidebar__upload-text">
+                После загрузки индексация запускается автоматически.
+              </span>
+
+              <input
+                class="normative-sidebar__file-input"
+                data-normative-file-input
+                type="file"
+                accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                multiple
+                tabindex="-1"
+              >
+            </div>
+
+            <div
+              class="normative-sidebar__tree"
+              data-normative-tree
+              aria-label="Документы нормативного раздела"
+            ></div>
+
+            <p
+              class="normative-sidebar__status"
+              data-normative-status
+              data-state="normal"
+              role="status"
+              aria-live="polite"
+            >
+              Загружаем нормативный каталог…
+            </p>
+          </div>
+        </details>
+      </section>
+
+      <section
+        class="normative-sidebar__block normative-sidebar__user-packages"
+        data-user-packages-block
+        aria-disabled="true"
+      >
+        <p class="normative-sidebar__block-hint" data-user-packages-unavailable role="status">
+          Будет доступно после привязки пакетов к владельцу.
+        </p>
+        <details
+          class="normative-sidebar__accordion"
+          data-user-packages-accordion
+          open
+        >
+          <summary class="normative-sidebar__accordion-summary">
+            <span class="normative-sidebar__block-title">
+              Пользовательские пакеты документов
+            </span>
+
+            <span
+              class="normative-sidebar__accordion-indicator"
+              aria-hidden="true"
+            >
+              ▾
+            </span>
+          </summary>
+
+          <div class="normative-sidebar__accordion-content">
+            <div class="normative-sidebar__block-header">
+              <p class="normative-sidebar__block-hint">
+                Выбранные документы используются как дополнительный
+                пользовательский контекст, а не как нормативное основание.
+              </p>
+
+              <div
+                class="normative-sidebar__utility-actions"
+                aria-label="Выбор пользовательских документов"
+              >
+                <button
+                  class="normative-sidebar__utility-button"
+                  data-user-packages-select-all
+                  type="button"
+                  title="Выбрать все готовые документы"
+                  aria-label="Выбрать все готовые документы"
+                  disabled
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="18"
+                    height="18"
+                    aria-hidden="true"
+                  >
+                    <rect
+                      x="3"
+                      y="3"
+                      width="18"
+                      height="18"
+                      rx="3"
+                    ></rect>
+
+                    <path
+                      d="M7 12.5l3.2 3.2L17.5 8.5"
+                    ></path>
+                  </svg>
+                </button>
+
+                <button
+                  class="normative-sidebar__utility-button"
+                  data-user-packages-clear
+                  type="button"
+                  title="Снять выбор со всех документов"
+                  aria-label="Снять выбор со всех документов"
+                  disabled
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="18"
+                    height="18"
+                    aria-hidden="true"
+                  >
+                    <rect
+                      x="3"
+                      y="3"
+                      width="18"
+                      height="18"
+                      rx="3"
+                    ></rect>
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="normative-sidebar__toolbar">
+              <button
+                class="normative-sidebar__button"
+                data-user-package-create
+                type="button"
+                disabled
+              >
+                + Пакет
+              </button>
+            </div>
+
+            <div
+              class="normative-sidebar__upload"
+              data-user-package-upload-zone
+              data-disabled="true"
+              role="button"
+              tabindex="-1"
+              aria-label="Загрузить пользовательские документы"
+            >
+              <strong class="normative-sidebar__upload-title">
+                Добавить документ
+              </strong>
+
+              <span class="normative-sidebar__upload-text">
+                PDF, DOC или DOCX.
+              </span>
+
+              <span class="normative-sidebar__upload-text">
+                Можно загрузить сюда или непосредственно в пакет.
+              </span>
+
+              <input
+                class="normative-sidebar__file-input"
+                data-user-package-file-input
+                type="file"
+                accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                multiple
+                disabled
+                tabindex="-1"
+              >
+            </div>
+
+            <div
+              class="normative-sidebar__tree normative-sidebar__packages-tree"
+              data-user-packages-tree
+              aria-label="Пользовательские пакеты документов"
+            ></div>
+
+            <p
+              class="normative-sidebar__status"
+              data-user-packages-status
+              data-state="normal"
+              role="status"
+              aria-live="polite"
+            >
+              Выберите нормативный раздел.
+            </p>
+          </div>
+        </details>
+      </section>
+
+      <section
+        class="normative-sidebar__prompt"
+        data-normative-prompt-block
+      >
+        <button
+          class="normative-sidebar__prompt-title-button"
+          data-normative-prompt-open
+          type="button"
+          aria-haspopup="dialog"
+          aria-controls="normativePromptDialog"
+          title="Открыть system prompt в большом редакторе"
+        >
+          <span>
+            Рабочий system prompt
+          </span>
+
+          <span
+            class="normative-sidebar__prompt-title-icon"
+            aria-hidden="true"
+          >
+            ↗
+          </span>
+        </button>
+
+        <textarea
+          id="normativePrompt"
+          class="normative-sidebar__prompt-textarea"
+          data-normative-prompt
+          rows="7"
+          spellcheck="false"
+          aria-label="Рабочий system prompt"
+          disabled
+        ></textarea>
+
+        <div class="normative-sidebar__toolbar">
+          <button
+            class="normative-sidebar__button"
+            data-normative-prompt-save
+            type="button"
+            disabled
+          >
+            Сохранить как системный
+          </button>
+
+          <button
+            class="normative-sidebar__button"
+            data-normative-prompt-restore
+            type="button"
+            disabled
+          >
+            Восстановить системный
+          </button>
+        </div>
+
+        <p
+          class="normative-sidebar__prompt-status"
+          data-normative-prompt-status
+          data-state="normal"
+          role="status"
+          aria-live="polite"
+        >
+          Выберите нормативный раздел.
+        </p>
+      </section>
+
+      <dialog
+        id="normativePromptDialog"
+        class="normative-sidebar__prompt-dialog"
+        data-normative-prompt-dialog
+        aria-labelledby="normativePromptDialogTitle"
+      >
+        <div class="normative-sidebar__prompt-dialog-shell">
+          <div class="normative-sidebar__prompt-dialog-header">
+            <div>
+              <h2
+                id="normativePromptDialogTitle"
+                class="normative-sidebar__prompt-dialog-title"
+              >
+                Рабочий system prompt
+              </h2>
+
+              <p class="normative-sidebar__prompt-dialog-description">
+                Здесь можно читать и редактировать тот же рабочий prompt,
+                который используется при запуске анализа.
+              </p>
+            </div>
+
+            <button
+              class="normative-sidebar__prompt-dialog-close"
+              data-normative-prompt-dialog-close
+              type="button"
+              aria-label="Закрыть редактор prompt"
+              title="Закрыть"
+            >
+              ×
+            </button>
+          </div>
+
+          <textarea
+            class="normative-sidebar__prompt-dialog-textarea"
+            data-normative-prompt-dialog-textarea
+            spellcheck="false"
+            aria-label="Рабочий system prompt в увеличенном редакторе"
+            disabled
+          ></textarea>
+
+          <div class="normative-sidebar__prompt-dialog-footer">
+            <div class="normative-sidebar__toolbar">
+              <button
+                class="normative-sidebar__button"
+                data-normative-prompt-dialog-save
+                type="button"
+                disabled
+              >
+                Сохранить как системный
+              </button>
+
+              <button
+                class="normative-sidebar__button"
+                data-normative-prompt-dialog-restore
+                type="button"
+                disabled
+              >
+                Восстановить системный
+              </button>
+            </div>
+
+            <button
+              class="normative-sidebar__button"
+              data-normative-prompt-dialog-close
+              type="button"
+            >
+              Закрыть
+            </button>
+          </div>
+
+          <p
+            class="normative-sidebar__prompt-status"
+            data-normative-prompt-dialog-status
+            data-state="normal"
+            role="status"
+            aria-live="polite"
+          >
+            Выберите нормативный раздел.
+          </p>
+        </div>
+      </dialog>
+    </aside>
+
+    <div class="page__main">
+      <section
+        class="analysis-panel"
+        aria-labelledby="analysisTitle"
+      >
+        <h1
+          id="analysisTitle"
+          class="analysis-panel__title"
+        >
+          Проверка проектной и рабочей документации
+        </h1>
+
+        <p class="analysis-panel__description">
+          Загрузите PDF, DWG/DXF или PDF вместе с соответствующим CAD-файлом.
+          Выберите нужные источники и дополнительные проверки, затем запустите анализ.
+        </p>
+
+        <form
+          id="analysisForm"
+          class="analysis-form"
+          data-analysis-form
+        >
+          <div class="analysis-form__field">
+            <label
+              class="analysis-form__label"
+              for="pdfFile"
+            >
+              PDF
+            </label>
+
+            <input
+              id="pdfFile"
+              class="analysis-form__control"
+              data-pdf-input
+              type="file"
+              name="pdf"
+              accept=".pdf,application/pdf"
+            >
+
+            <p class="analysis-form__hint">
+              Можно проверить весь документ или указанные страницы PDF.
+            </p>
+          </div>
+
+          <div class="analysis-form__field">
+            <label
+              class="analysis-form__label"
+              for="cadFile"
+            >
+              DWG / DXF
+            </label>
+
+            <input
+              id="cadFile"
+              class="analysis-form__control"
+              data-cad-input
+              type="file"
+              name="cad"
+              accept=".dwg,.dxf"
+            >
+
+            <p class="analysis-form__hint">
+              CAD-чертёж рассматривается как один лист.
+            </p>
+          </div>
+
+          <div class="analysis-form__field">
+            <label
+              class="analysis-form__label"
+              for="pages"
+            >
+              Страницы PDF
+            </label>
+
+            <input
+              id="pages"
+              class="analysis-form__control"
+              data-pages-input
+              type="text"
+              name="pages"
+              autocomplete="off"
+              placeholder="Например: 3,5,8-12. Пусто = весь PDF"
+            >
+
+            <p
+              class="analysis-form__hint"
+              data-pages-hint
+            >
+              До 200 страниц за одну проверку. Для большого PDF укажите диапазон, например 1-200.
+            </p>
+          </div>
+
+          <div class="analysis-form__sources-note">
+            <strong>Источники проверки</strong>
+            <p>N — готовые нормативы выбранного раздела. T — подготовленное ТЗ этого раздела.
+              U — отмеченные дополнительные документы. Эти источники выбираются в блоке слева.</p>
+            <a href="/help.html#sources">Как работают источники и их сочетания?</a>
+          </div>
+
+          <fieldset class="analysis-form__context">
+            <legend class="analysis-form__context-title">
+              Дополнительные проверки
+            </legend>
+
+            <div class="analysis-form__setting" data-setting-help="explanatory-note">
+            <label class="analysis-form__toggle">
+              <input
+                class="analysis-form__toggle-control"
+                data-explanatory-note-input
+                type="checkbox"
+                name="use_explanatory_note"
+              >
+
+              <span class="analysis-form__toggle-label">
+                Использовать пояснительную записку
+              </span>
+            </label>
+            <p class="analysis-form__hint">Описание проекта с указанного ниже диапазона PDF. Не заменяет нормативное основание.</p>
+            </div>
+
+            <div class="analysis-form__setting" data-setting-help="document-context">
+            <label class="analysis-form__toggle">
+              <input class="analysis-form__toggle-control" data-document-context-input
+                type="checkbox" name="use_document_context">
+              <span class="analysis-form__toggle-label">
+                Учитывать контекст всего проекта
+              </span>
+            </label>
+            <p class="analysis-form__hint">D — связи между листами этого PDF. Обычно дольше; оценка около 2,5 раза приблизительна.</p>
+            </div>
+            <div class="analysis-form__setting" data-setting-help="equipment-search">
+            <label class="analysis-form__toggle">
+              <input class="analysis-form__toggle-control" data-equipment-search-input
+                type="checkbox" name="use_equipment_web_search">
+              <span class="analysis-form__toggle-label">
+                Искать документацию на оборудование в интернете
+              </span>
+            </label>
+            <p class="analysis-form__hint">EQ — паспорта и характеристики конкретных моделей. Доступно только для PDF без CAD.</p>
+            </div>
+            <div class="analysis-form__setting" data-setting-help="unverified-sources">
+            <label class="analysis-form__toggle">
+              <input class="analysis-form__toggle-control" data-unverified-sources-input
+                type="checkbox" name="allow_unverified_equipment_sources" disabled>
+              <span class="analysis-form__toggle-label">
+                Разрешить неподтверждённые источники
+              </span>
+            </label>
+            <p class="analysis-form__hint">
+              Доступно при включённом EQ. Данные остаются помеченными; разрешение действует только для этого задания.
+            </p>
+            </div>
+
+            <div class="analysis-form__note-range">
+              <div class="analysis-form__field">
+                <label
+                  class="analysis-form__label"
+                  for="noteStartPage"
+                >
+                  Начальная страница ПЗ
+
+                  <span
+                    class="analysis-form__required"
+                    aria-hidden="true"
+                  >
+                    *
+                  </span>
+                </label>
+
+                <input
+                  id="noteStartPage"
+                  class="analysis-form__control"
+                  data-note-start-input
+                  type="number"
+                  name="note_start_page"
+                  min="1"
+                  step="1"
+                  disabled
+                >
+              </div>
+
+              <div class="analysis-form__field">
+                <label
+                  class="analysis-form__label"
+                  for="noteEndPage"
+                >
+                  Конечная страница ПЗ
+
+                  <span
+                    class="analysis-form__required"
+                    aria-hidden="true"
+                  >
+                    *
+                  </span>
+                </label>
+
+                <input
+                  id="noteEndPage"
+                  class="analysis-form__control"
+                  data-note-end-input
+                  type="number"
+                  name="note_end_page"
+                  min="1"
+                  step="1"
+                  disabled
+                >
+              </div>
+            </div>
+          </fieldset>
+
+          <span class="analysis-form__submit-guard" data-analysis-submit-guard tabindex="0" title="Выберите раздел, чтобы запустить анализ.">
+          <button
+            class="analysis-form__submit"
+            data-submit-button
+            type="submit"
+            disabled
+            title="Выберите раздел, чтобы запустить анализ."
+          >
+            Запустить анализ
+          </button>
+          </span>
+        </form>
+      </section>
+
+      <section
+        class="analysis-panel analysis-panel--result"
+        aria-labelledby="resultTitle"
+      >
+        <h2
+          id="resultTitle"
+          class="analysis-panel__title"
+        >
+          Результат
+        </h2>
+
+        <div
+          class="analysis-result"
+          data-analysis-result
+          aria-live="polite"
+        >
+          <p class="analysis-result__placeholder">
+            Результат анализа появится здесь.
+          </p>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <div
+    class="analysis-modal is-hidden"
+    data-analysis-modal
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="analysisModalTitle"
+    aria-describedby="analysisModalText"
+    aria-hidden="true"
+  >
+    <div class="analysis-modal__dialog">
+      <div
+        class="analysis-modal__spinner"
+        aria-hidden="true"
+      ></div>
+
+      <h2
+        id="analysisModalTitle"
+        class="analysis-modal__title"
+      >
+        Выполняется анализ
+      </h2>
+
+      <p
+        id="analysisModalText"
+        class="analysis-modal__text"
+        data-analysis-modal-text
+      >
+        Идёт анализ документа…
+      </p>
+
+      <div
+        class="analysis-modal__job"
+        data-analysis-modal-job
+        hidden
+      >
+        <span class="analysis-modal__job-label">
+          Задание:
+        </span>
+
+        <code
+          class="analysis-modal__job-id"
+          data-analysis-modal-job-id
+        ></code>
+
+        <button
+          class="analysis-modal__copy-button"
+          data-analysis-modal-copy
+          type="button"
+        >
+          Копировать
+        </button>
+
+        <span
+          class="analysis-modal__copy-status"
+          data-analysis-modal-copy-status
+          role="status"
+          aria-live="polite"
+        ></span>
+      </div>
+
+      <p class="analysis-modal__hint">
+        Обработка может занять некоторое время.
+        Страница автоматически покажет готовый результат.
+      </p>
+    </div>
+  </div>
+  <dialog class="auth-dialog" data-auth-dialog aria-labelledby="authDialogTitle">
+    <div class="auth-dialog__top">
+      <div>
+        <p class="auth-dialog__eyebrow">Учётная запись PDRD</p>
+        <h2 id="authDialogTitle" data-auth-title>Вход</h2>
+      </div>
+      <button type="button" class="auth-dialog__close" data-auth-close aria-label="Закрыть">×</button>
+    </div>
+    <div class="auth-dialog__tabs" role="group" aria-label="Способ входа">
+      <button type="button" data-auth-tab="login" aria-pressed="true">Войти</button>
+      <button type="button" data-auth-tab="register" aria-pressed="false">Регистрация</button>
+    </div>
+    <form data-auth-login-form class="auth-dialog__form">
+      <label>Корпоративный логин или email<input name="login" autocomplete="username" required></label>
+      <label>Пароль<input name="password" type="password" autocomplete="current-password" required></label>
+      <button type="submit" class="auth-dialog__submit">Войти</button>
+    </form>
+    <form data-auth-register-form class="auth-dialog__form" hidden>
+      <label>Имя<input name="display_name" autocomplete="name" maxlength="255" required></label>
+      <label>Email<input name="email" type="email" autocomplete="email" maxlength="320" required></label>
+      <label>Пароль<input name="password" type="password" autocomplete="new-password" minlength="12" required></label>
+      <button type="submit" class="auth-dialog__submit">Создать аккаунт</button>
+    </form>
+    <p class="auth-dialog__hint" data-auth-hint>Корпоративный вход проверяется через защищённое соединение с AD.</p>
+    <p class="auth-dialog__message" data-auth-message role="status" aria-live="polite"></p>
+  </dialog>
+</body>
+</html>

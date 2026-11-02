@@ -1,0 +1,60 @@
+/* frontend/src/css/blocks/page.css */
+
+/*
+ * BEM-блок основной страницы приложения.
+ */
+
+.page {
+  min-width: 320px;
+}
+
+.page__content {
+  display: grid;
+
+  grid-template-columns:
+    minmax(300px, var(--sidebar-width))
+    minmax(0, 1fr);
+
+  gap: var(--space-9);
+
+  width: min(
+    var(--page-max-width),
+    calc(100% - 32px)
+  );
+
+  margin: var(--space-page) auto;
+}
+
+.page__main {
+  min-width: 0;
+}
+
+.page__auxiliary { display: grid; align-content: start; gap: var(--space-4); min-width: 0; }
+.page__auxiliary[hidden] { display: none; }
+
+@media (min-width: 981px) and (max-width: 1379px) {
+  .page__auxiliary {
+    grid-column: 2;
+    grid-row: 2;
+  }
+}
+
+@media (min-width: 1380px) {
+  .page__content:has(.page__auxiliary:not([hidden])) {
+    grid-template-columns:
+      minmax(300px, var(--sidebar-width))
+      minmax(0, 1fr)
+      minmax(190px, 220px);
+  }
+
+  .page__auxiliary {
+    grid-column: 3;
+    grid-row: 1;
+  }
+}
+
+@media (max-width: 980px) {
+  .page__content {
+    grid-template-columns: 1fr;
+  }
+}

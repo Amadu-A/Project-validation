@@ -1,0 +1,19 @@
+# requirements-dev.txt
+# Инструменты локальной и серверной проверки качества.
+
+pytest>=8.4,<10.0
+pytest-asyncio>=1.1,<2.0
+pytest-cov>=6.2,<8.0
+ruff>=0.12,<1.0
+
+# Editable backend services вместе с лёгкими test dependencies.
+-e ./services/api-gateway[test]
+-e ./services/document-service[test]
+-e ./services/knowledge-service[test]
+-e ./services/analysis-service[test]
+-e ./services/equipment-search-service[test]
+-e ./services/multimodal-embedding-service[test]
+-e ./services/experience-service
+-e ./services/user-service[test]
+-e ./services/auth-service[test]
+-e ./services/admin-service[test]

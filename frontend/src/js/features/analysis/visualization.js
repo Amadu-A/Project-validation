@@ -1,0 +1,2243 @@
+// frontend/src/js/features/analysis/visualization.js
+
+/**
+ * Визуализация замечаний поверх изображений страниц PDF.
+ *
+ * BBox приходит в нормализованных координатах 0..1000.
+ * Одно замечание может содержать несколько областей доказательств.
+ * Каждый finding имеет собственную карточку, области, соединители и действия Review.
+ * Карточки размещаются поверх листа автоматически.
+ * Неподтверждённые гипотезы не получают рамки локализации.
+ * Текст и сведения об источниках вставляются только через textContent.
+ */
+
+import { createFindingSelection } from "./visualization-selection.js";
+import { preferredSourceArray, focusDocumentEvidence } from "./finding-provenance.js";
+import { registerVisualizationReview, reviewCalloutBox } from "./visualization-review.js";
+
+const CALLOUT_MARGIN_PX = 10;
+const CALLOUT_GAP_PX = 14;
+const CARD_OVERLAP_WEIGHT = 12;
+const REGION_OVERLAP_WEIGHT = 5;
+const DISTANCE_WEIGHT = 0.015;
+
+const GENERIC_FINDING_PREFIX = (
+  "на листе выявлено несоответствие"
+);
+
+let tooltipSequence = 0;
+
+
+function createElement(
+  tagName,
+  className = "",
+  text = null,
+) {
+  const node = document.createElement(
+    tagName,
+  );
+
+  if (className) {
+    node.className = className;
+  }
+
+  if (
+    text !== null
+    && text !== undefined
+  ) {
+    node.textContent = String(
+      text,
+    );
+  }
+
+  return node;
+}
+
+
+function normalizedPage(
+  value,
+) {
+  const page = Number(
+    value,
+  );
+
+  if (
+    !Number.isInteger(
+      page,
+    )
+    || page < 1
+  ) {
+    return null;
+  }
+
+  return page;
+}
+
+
+function normalizeRawBox(
+  rawBox,
+  region = null,
+) {
+  if (!rawBox) {
+    return null;
+  }
+
+  const box = {
+    xMin: Number(
+      rawBox.x_min,
+    ),
+    yMin: Number(
+      rawBox.y_min,
+    ),
+    xMax: Number(
+      rawBox.x_max,
+    ),
+    yMax: Number(
+      rawBox.y_max,
+    ),
+    label: (
+      region?.label
+      ?? null
+    ),
+    source: (
+      region?.source
+      ?? null
+    ),
+  };
+
+  const values = [
+    box.xMin,
+    box.yMin,
+    box.xMax,
+    box.yMax,
+  ];
+
+  if (
+    values.some(
+      (value) => (
+        !Number.isFinite(
+          value,
+        )
+        || value < 0
+        || value > 1000
+      ),
+    )
+    || box.xMin >= box.xMax
+    || box.yMin >= box.yMax
+  ) {
+    return null;
+  }
+
+  return box;
+}
+
+
+function normalizedBoxes(
+  finding,
+) {
+  const location = (
+    finding?.location
+  );
+
+  if (
+    location?.status !== "located"
+  ) {
+    return [];
+  }
+
+  const rawRegions = (
+    Array.isArray(
+      location.regions,
+    )
+      ? location.regions
+      : []
+  );
+
+  const regionBoxes = rawRegions
+    .map(
+      (region) => (
+        normalizeRawBox(
+          region?.bbox,
+          region,
+        )
+      ),
+    )
+    .filter(
+      Boolean,
+    );
+
+  if (regionBoxes.length) {
+    return regionBoxes.filter((box, index, boxes) => boxes.findIndex((other) => (
+      other.xMin === box.xMin && other.yMin === box.yMin
+      && other.xMax === box.xMax && other.yMax === box.yMax
+    )) === index);
+  }
+
+  const legacyBox = normalizeRawBox(
+    location.bbox,
+  );
+
+  return (
+    legacyBox
+      ? [
+        legacyBox,
+      ]
+      : []
+  );
+}
+
+
+function pageLocationMap(
+  page,
+) {
+  const locations = (
+    Array.isArray(
+      page.locations,
+    )
+      ? page.locations
+      : []
+  );
+
+  return new Map(
+    locations
+      .filter(
+        (location) => (
+          location
+          && typeof location
+          === "object"
+        ),
+      )
+      .map(
+        (location) => [
+          String(
+            location.finding_id
+            ?? "",
+          ),
+          location,
+        ],
+      ),
+  );
+}
+
+
+function findingsForPage(
+  payload,
+  page,
+) {
+  if (!Array.isArray(
+    payload.findings,
+  )) {
+    return [];
+  }
+
+  const pageNumber = normalizedPage(
+    page.page_number,
+  );
+
+  if (pageNumber === null) {
+    return [];
+  }
+
+  const locations = pageLocationMap(
+    page,
+  );
+
+  return payload.findings
+    .filter((finding) => finding.status !== "hypothesis")
+    .map(
+      (
+        finding,
+        findingIndex,
+      ) => ({
+        finding,
+        findingIndex,
+      }),
+    )
+    .filter(
+      ({
+        finding,
+      }) => (
+        normalizedPage(finding.page ?? finding.page_number) === pageNumber
+        || (Array.isArray(finding.evidence_locations)
+          && finding.evidence_locations.some(
+            (item) => normalizedPage(item?.page) === pageNumber
+          ))
+      ),
+    )
+    .map(
+      ({
+        finding,
+        findingIndex,
+      }) => {
+        const findingId = String(
+          finding.finding_id
+          ?? "",
+        );
+
+        return {
+          finding: {
+            ...finding,
+            location: (
+              locations.get(
+                findingId,
+              )
+              ?? (normalizedPage(finding.page ?? finding.page_number) === pageNumber ? finding.location : null)
+              ?? {
+                status: "unlocated",
+                bbox: null,
+                regions: [],
+                confidence: 0,
+                method: "unlocated",
+              }
+            ),
+          },
+          findingIndex,
+        };
+      },
+    );
+}
+
+
+function sourceLine(
+  source,
+  fallbackName,
+) {
+  if (
+    !source
+    || typeof source !== "object"
+  ) {
+    return "";
+  }
+
+  const fileName = (
+    source.source_file
+    || source.file_name
+    || source.source
+    || source.source_id
+    || fallbackName
+  );
+
+  const parts = [
+    String(
+      fileName,
+    ),
+  ];
+
+  const page = (
+    source.page
+    ?? source.page_number
+  );
+
+  if (
+    page !== null
+    && page !== undefined
+    && page !== ""
+  ) {
+    parts.push(
+      `стр. ${page}`,
+    );
+  }
+
+  if (source.point_id) {
+    parts.push(
+      `п. ${source.point_id}`,
+    );
+  }
+
+  if (
+    source.score !== null
+    && source.score !== undefined
+  ) {
+    parts.push(
+      `score=${source.score}`,
+    );
+  }
+
+  return parts.join(
+    ", ",
+  );
+}
+
+
+function sourceListText(
+  sources,
+  fallbackName,
+) {
+  if (!Array.isArray(
+    sources,
+  )) {
+    return "";
+  }
+
+  const values = sources
+    .map(
+      (source) => (
+        sourceLine(
+          source,
+          fallbackName,
+        )
+      ),
+    )
+    .filter(
+      Boolean,
+    );
+
+  return [
+    ...new Set(
+      values,
+    ),
+  ].join(
+    "\n",
+  );
+}
+
+
+function findingComment(
+  finding,
+) {
+  return String(
+    finding.comment
+    || finding.message
+    || finding.issue_text
+    || "",
+  ).trim();
+}
+
+
+function findingDisplayText(
+  finding,
+) {
+  const comment = findingComment(
+    finding,
+  );
+
+  const evidence = String(
+    finding.evidence
+    || "",
+  ).trim();
+
+  const normalizedComment = comment
+    .toLocaleLowerCase(
+      "ru-RU",
+    )
+    .replace(
+      /\s+/g,
+      " ",
+    )
+    .trim();
+
+  if (
+    evidence
+    && normalizedComment.startsWith(
+      GENERIC_FINDING_PREFIX,
+    )
+  ) {
+    return evidence;
+  }
+
+  return (
+    comment
+    || evidence
+    || "Текст замечания не передан."
+  );
+}
+
+
+function projectContextText(
+  finding,
+) {
+  const sources = (
+    Array.isArray(
+      finding.project_context_sources,
+    )
+      ? finding.project_context_sources
+      : []
+  );
+
+  return sources
+    .map(
+      (source) => {
+        if (
+          !source
+          || typeof source !== "object"
+        ) {
+          return "";
+        }
+
+        const parts = [
+          String(
+            source.source_id
+            || "PZ",
+          ),
+        ];
+
+        if (
+          source.page !== null
+          && source.page !== undefined
+        ) {
+          parts.push(
+            `стр. ${source.page}`,
+          );
+        }
+
+        if (
+          source.score !== null
+          && source.score !== undefined
+        ) {
+          parts.push(
+            `score=${source.score}`,
+          );
+        }
+
+        return parts.join(
+          ", ",
+        );
+      },
+    )
+    .filter(
+      Boolean,
+    )
+    .join(
+      "\n",
+    );
+}
+
+
+function localizationText(
+  finding,
+) {
+  const location = finding.location;
+
+  if (
+    location?.status !== "located" || normalizedBoxes(finding).length === 0
+  ) {
+    return (
+      "Точное место на листе "
+      + "автоматически не определено."
+    );
+  }
+
+  if (
+    location.method === "vlm"
+  ) {
+    return (
+      "Область замечания определена "
+      + "по изображению листа."
+    );
+  }
+
+  if (
+    location.method === "pdf_text"
+  ) {
+    return (
+      "Область замечания определена "
+      + "по координатам текста PDF."
+    );
+  }
+
+  return (
+    "Область замечания определена "
+    + "автоматически."
+  );
+}
+
+
+function appendDetailField(
+  parent,
+  label,
+  value,
+) {
+  if (
+    value === null
+    || value === undefined
+    || String(
+      value,
+    ).trim() === ""
+  ) {
+    return;
+  }
+
+  const field = createElement(
+    "span",
+    "analysis-result__annotation-detail-field",
+  );
+
+  field.append(
+    createElement(
+      "strong",
+      "analysis-result__annotation-detail-label",
+      label,
+    ),
+  );
+
+  const valueNode = createElement("span", "analysis-result__annotation-detail-value", value);
+  field.append(valueNode);
+
+  parent.append(
+    field,
+  );
+  return valueNode;
+}
+
+
+function createFindingDetailControl(
+  finding,
+  findingIndex,
+  dependencies,
+) {
+  const wrapper = createElement(
+    "span",
+    "analysis-result__annotation-info",
+  );
+
+  const button = createElement(
+    "button",
+    "analysis-result__annotation-info-button",
+    "i",
+  );
+
+  button.type = "button";
+
+  button.setAttribute(
+    "aria-label",
+    (
+      `Полное замечание №${findingIndex + 1}`
+    ),
+  );
+
+  tooltipSequence += 1;
+
+  const tooltipId = (
+    `analysis-finding-tooltip-${tooltipSequence}`
+  );
+
+  button.setAttribute(
+    "aria-describedby",
+    tooltipId,
+  );
+
+  const tooltip = createElement(
+    "span",
+    "analysis-result__annotation-detail-tooltip",
+  );
+
+  tooltip.id = tooltipId;
+
+  tooltip.setAttribute(
+    "role",
+    "tooltip",
+  );
+
+  tooltip.append(
+    createElement(
+      "strong",
+      "analysis-result__annotation-detail-title",
+      (
+        `Полное замечание №${findingIndex + 1}`
+      ),
+    ),
+  );
+
+  const reviewText = appendDetailField(
+    tooltip,
+    "Замечание",
+    (
+      findingComment(
+        finding,
+      )
+      || "Текст замечания не передан."
+    ),
+  );
+  reviewText.dataset.reviewTooltipText = "";
+
+  appendDetailField(
+    tooltip,
+    "Основание на листе",
+    finding.evidence,
+  );
+
+  const reviewBasis = appendDetailField(
+    tooltip,
+    "Нормативное основание",
+    finding.basis || "Не указано.",
+  );
+  reviewBasis.dataset.reviewTooltipBasis = "";
+
+  appendDetailField(
+    tooltip,
+    "Нормативные источники",
+    sourceListText(
+      dependencies.normativeSources(
+        finding,
+      ),
+      "Нормативный источник",
+    ),
+  );
+
+  appendDetailField(
+    tooltip,
+    "Требования технического задания",
+    sourceListText(
+      preferredSourceArray(
+        finding.technical_assignment_basis_sources,
+        finding.technical_assignment_sources,
+      ),
+      "Техническое задание",
+    ),
+  );
+
+  appendDetailField(
+    tooltip,
+    "Пользовательские требования / документы",
+    sourceListText(
+      preferredSourceArray(
+        finding.user_package_basis_sources,
+        finding.user_package_sources,
+      ),
+      "Пользовательский документ",
+    ),
+  );
+
+  const equipmentSources = Array.isArray(finding.equipment_documentation_basis_sources)
+    ? finding.equipment_documentation_basis_sources : [];
+  if (equipmentSources.length) {
+    const eq = finding.equipment_details ?? {};
+    appendDetailField(
+      tooltip, "Документация производителя [EQ]",
+      equipmentSources.map((source) =>
+        `${source.manufacturer || ""} ${source.model || ""} · ревизия ${source.document_revision || "?"} · стр. ${source.page || "?"}: ${source.snippet || ""}`
+      ).join("\n"),
+    );
+    appendDetailField(
+      tooltip, "Сравнение оборудования",
+      `${eq.property_name || ""}: проект ${eq.project_value || ""} ${eq.project_unit || ""}; производитель ${eq.manufacturer_value || ""} ${eq.manufacturer_unit || ""}.`,
+    );
+  }
+
+  appendDetailField(
+    tooltip,
+    "Контекст ПЗ",
+    projectContextText(
+      finding,
+    ),
+  );
+
+  appendDetailField(
+    tooltip,
+    "Рекомендация",
+    (
+      finding.recommendation
+      || finding.recommendation_draft
+      || "Не указана."
+    ),
+  );
+
+  if (
+    finding.confidence !== null
+    && finding.confidence !== undefined
+  ) {
+    appendDetailField(
+      tooltip,
+      "Уверенность",
+      finding.confidence,
+    );
+  }
+
+  appendDetailField(
+    tooltip,
+    "Локализация",
+    localizationText(
+      finding,
+    ),
+  );
+
+  wrapper.append(
+    button,
+    tooltip,
+  );
+
+  return wrapper;
+}
+
+
+/** Добавляет компактные ссылки через общие с отчётом компоненты N/T/U и доказательства D.
+ * Источник без рабочего маршрута остаётся только в полном текстовом отчёте.
+ * У ПЗ нет публичного маршрута к исходному PDF, поэтому адрес не придумывается.
+ */
+function appendFindingLinks(parent, finding, dependencies) {
+  const sourcesBlock = createElement("div", "analysis-result__annotation-sources");
+  const groups = [
+    ["N", dependencies.normativeSources(finding), dependencies.createNormativeCitation],
+    ["T", dependencies.technicalAssignmentSources(finding), dependencies.createTechnicalAssignmentCitation],
+    ["U", dependencies.userPackageSources(finding), dependencies.createUserPackageCitation],
+  ];
+  for (const [kind, sources, createCitation] of groups) {
+    for (const source of sources) {
+      const link = createCitation(source);
+      if (link.tagName !== "A") continue;
+      const fileName = String(source.source_file || source.file_name || source.source || "")
+        .split(/[\\/]/).at(-1).replace(/\.(pdf|docx?|xlsx?)$/i, "");
+      const name = kind === "T" ? "ТЗ" : fileName || (kind === "N" ? "Норматив" : "Документ");
+      const page = normalizedPage(source.page ?? source.page_number);
+      link.setAttribute("aria-label", link.textContent);
+      link.removeAttribute("title");
+      link.textContent = `${name} · стр. ${page}`;
+      const wrapper = createElement("span", "analysis-result__annotation-source");
+      wrapper.append(link);
+      sourcesBlock.append(wrapper);
+    }
+  }
+  for (const source of finding.equipment_documentation_basis_sources ?? []) {
+    const saved = dependencies.equipmentSnapshotUrl?.(source.source_id);
+    const external = String(source.source_url || "");
+    const url = saved || (/^https?:\/\//i.test(external) ? external : "");
+    if (!url) continue;
+    const link = createElement(
+      "a", "analysis-result__source-link",
+      `EQ · ${source.manufacturer || ""} ${source.model || ""} · стр. ${source.page || "?"}`,
+    );
+    link.href = url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    const wrapper = createElement("span", "analysis-result__annotation-source");
+    wrapper.append(link);
+    sourcesBlock.append(wrapper);
+  }
+  const documentPages = new Set();
+  for (const source of finding.document_context_basis_sources ?? []) {
+    const page = normalizedPage(source?.page);
+    if (page === null || documentPages.has(page)) continue;
+    documentPages.add(page);
+    const link = createElement("a", "analysis-result__source-link", `PDF · стр. ${page}`);
+    link.href = `#analysis-page-${page}`;
+    link.setAttribute("aria-label", `Доказательство замечания №${finding.finding_id} на странице ${page} проверяемого PDF`);
+    focusDocumentEvidence(link, finding.finding_id, page);
+    const wrapper = createElement("span", "analysis-result__annotation-source");
+    wrapper.append(link);
+    sourcesBlock.append(wrapper);
+  }
+  if (sourcesBlock.children.length) parent.append(sourcesBlock);
+}
+
+
+/** Строит карточку: номер, конкретный текст, раскрытие подробностей и рабочие ссылки. */
+function createCallout(
+  finding,
+  findingIndex,
+  dependencies,
+) {
+  const callout = createElement(
+    "article",
+    "analysis-result__annotation",
+  );
+
+  callout.tabIndex = 0;
+
+  const findingId = String(
+    finding.finding_id
+    ?? "",
+  );
+
+  if (findingId) {
+    callout.dataset.findingId = findingId;
+  }
+
+  const header = createElement(
+    "div",
+    "analysis-result__annotation-header",
+  );
+
+  header.append(
+    createElement(
+      "span",
+      "analysis-result__annotation-number",
+      findingIndex + 1,
+    ),
+  );
+
+  header.append(
+    createElement(
+      "span",
+      "analysis-result__annotation-title",
+      findingDisplayText(
+        finding,
+      ),
+    ),
+  );
+
+  header.append(
+    createFindingDetailControl(
+      finding,
+      findingIndex,
+      dependencies,
+    ),
+  );
+
+
+  callout.append(
+    header,
+  );
+
+  appendFindingLinks(
+    callout,
+    finding,
+    dependencies,
+  );
+
+  if (
+    !normalizedBoxes(
+      finding,
+    ).length
+  ) {
+    callout.append(
+      createElement(
+        "span",
+        "analysis-result__annotation-unlocated",
+        (
+          "Точное место на листе "
+          + "не определено."
+        ),
+      ),
+    );
+  }
+
+  return callout;
+}
+
+
+function createBoundingBoxes(
+  finding,
+  findingIndex,
+) {
+  return normalizedBoxes(
+    finding,
+  ).map(
+    (box) => {
+      const node = createElement(
+        "div",
+        "analysis-result__bbox",
+      );
+
+      node.style.left = (
+        `${box.xMin / 10}%`
+      );
+
+      node.style.top = (
+        `${box.yMin / 10}%`
+      );
+
+      node.style.width = (
+        `${(
+          box.xMax
+          - box.xMin
+        ) / 10}%`
+      );
+
+      node.style.height = (
+        `${(
+          box.yMax
+          - box.yMin
+        ) / 10}%`
+      );
+
+      if (box.label) {
+        node.title = (
+          `Область: ${box.label}`
+        );
+      }
+
+      node.append(
+        createElement(
+          "span",
+          "analysis-result__bbox-number",
+          findingIndex + 1,
+        ),
+      );
+
+      return {
+        box,
+        node,
+      };
+    },
+  );
+}
+
+
+function clamp(
+  value,
+  minimum,
+  maximum,
+) {
+  return Math.min(
+    Math.max(
+      value,
+      minimum,
+    ),
+    maximum,
+  );
+}
+
+
+function normalizedBoxToPixels(
+  box,
+  paneWidth,
+  paneHeight,
+) {
+  return {
+    left: (
+      box.xMin
+      / 1000
+      * paneWidth
+    ),
+    top: (
+      box.yMin
+      / 1000
+      * paneHeight
+    ),
+    right: (
+      box.xMax
+      / 1000
+      * paneWidth
+    ),
+    bottom: (
+      box.yMax
+      / 1000
+      * paneHeight
+    ),
+  };
+}
+
+
+function unionRect(
+  rects,
+  paneWidth,
+  paneHeight,
+) {
+  if (!rects.length) {
+    const centerX = (
+      paneWidth
+      / 2
+    );
+
+    const centerY = (
+      paneHeight
+      / 2
+    );
+
+    return {
+      left: centerX,
+      top: centerY,
+      right: centerX,
+      bottom: centerY,
+    };
+  }
+
+  return {
+    left: Math.min(
+      ...rects.map(
+        (rect) => rect.left,
+      ),
+    ),
+    top: Math.min(
+      ...rects.map(
+        (rect) => rect.top,
+      ),
+    ),
+    right: Math.max(
+      ...rects.map(
+        (rect) => rect.right,
+      ),
+    ),
+    bottom: Math.max(
+      ...rects.map(
+        (rect) => rect.bottom,
+      ),
+    ),
+  };
+}
+
+
+function rectangleArea(
+  rect,
+) {
+  return (
+    Math.max(
+      0,
+      rect.right - rect.left,
+    )
+    * Math.max(
+      0,
+      rect.bottom - rect.top,
+    )
+  );
+}
+
+
+function intersectionArea(
+  first,
+  second,
+) {
+  return rectangleArea(
+    {
+      left: Math.max(
+        first.left,
+        second.left,
+      ),
+      top: Math.max(
+        first.top,
+        second.top,
+      ),
+      right: Math.min(
+        first.right,
+        second.right,
+      ),
+      bottom: Math.min(
+        first.bottom,
+        second.bottom,
+      ),
+    },
+  );
+}
+
+
+function distanceBetweenCenters(
+  first,
+  second,
+) {
+  const firstX = (
+    first.left
+    + first.right
+  ) / 2;
+
+  const firstY = (
+    first.top
+    + first.bottom
+  ) / 2;
+
+  const secondX = (
+    second.left
+    + second.right
+  ) / 2;
+
+  const secondY = (
+    second.top
+    + second.bottom
+  ) / 2;
+
+  return Math.hypot(
+    firstX - secondX,
+    firstY - secondY,
+  );
+}
+
+
+function createCandidateRect(
+  left,
+  top,
+  width,
+  height,
+  paneWidth,
+  paneHeight,
+) {
+  const safeRight = Math.max(
+    CALLOUT_MARGIN_PX,
+    paneWidth
+    - width
+    - CALLOUT_MARGIN_PX,
+  );
+
+  const safeBottom = Math.max(
+    CALLOUT_MARGIN_PX,
+    paneHeight
+    - height
+    - CALLOUT_MARGIN_PX,
+  );
+
+  const clampedLeft = clamp(
+    left,
+    CALLOUT_MARGIN_PX,
+    safeRight,
+  );
+
+  const clampedTop = clamp(
+    top,
+    CALLOUT_MARGIN_PX,
+    safeBottom,
+  );
+
+  return {
+    left: clampedLeft,
+    top: clampedTop,
+    right: clampedLeft + width,
+    bottom: clampedTop + height,
+  };
+}
+
+
+function candidateRects(
+  anchor,
+  width,
+  height,
+  paneWidth,
+  paneHeight,
+) {
+  const centerX = (
+    anchor.left
+    + anchor.right
+  ) / 2;
+
+  const centerY = (
+    anchor.top
+    + anchor.bottom
+  ) / 2;
+
+  const candidates = [
+    [
+      anchor.right + CALLOUT_GAP_PX,
+      centerY - height / 2,
+    ],
+    [
+      anchor.left
+      - width
+      - CALLOUT_GAP_PX,
+      centerY - height / 2,
+    ],
+    [
+      centerX - width / 2,
+      anchor.bottom + CALLOUT_GAP_PX,
+    ],
+    [
+      centerX - width / 2,
+      anchor.top
+      - height
+      - CALLOUT_GAP_PX,
+    ],
+    [
+      anchor.right + CALLOUT_GAP_PX,
+      anchor.top
+      - height
+      - CALLOUT_GAP_PX,
+    ],
+    [
+      anchor.right + CALLOUT_GAP_PX,
+      anchor.bottom + CALLOUT_GAP_PX,
+    ],
+    [
+      anchor.left
+      - width
+      - CALLOUT_GAP_PX,
+      anchor.top
+      - height
+      - CALLOUT_GAP_PX,
+    ],
+    [
+      anchor.left
+      - width
+      - CALLOUT_GAP_PX,
+      anchor.bottom + CALLOUT_GAP_PX,
+    ],
+  ];
+
+  const verticalOffsets = [
+    -1.35,
+    -0.7,
+    0,
+    0.7,
+    1.35,
+  ];
+
+  verticalOffsets.forEach(
+    (factor) => {
+      candidates.push(
+        [
+          paneWidth
+          - width
+          - CALLOUT_MARGIN_PX,
+          (
+            centerY
+            - height / 2
+            + factor
+            * (
+              height
+              + CALLOUT_GAP_PX
+            )
+          ),
+        ],
+      );
+
+      candidates.push(
+        [
+          CALLOUT_MARGIN_PX,
+          (
+            centerY
+            - height / 2
+            + factor
+            * (
+              height
+              + CALLOUT_GAP_PX
+            )
+          ),
+        ],
+      );
+    },
+  );
+
+  const horizontalStep = Math.max(
+    width + CALLOUT_GAP_PX,
+    1,
+  );
+
+  const verticalStep = Math.max(
+    height + CALLOUT_GAP_PX,
+    1,
+  );
+
+  for (
+    let top = CALLOUT_MARGIN_PX;
+    top <= (
+      paneHeight
+      - height
+      - CALLOUT_MARGIN_PX
+    );
+    top += verticalStep
+  ) {
+    for (
+      let left = CALLOUT_MARGIN_PX;
+      left <= (
+        paneWidth
+        - width
+        - CALLOUT_MARGIN_PX
+      );
+      left += horizontalStep
+    ) {
+      candidates.push(
+        [
+          left,
+          top,
+        ],
+      );
+    }
+  }
+
+  const unique = new Map();
+
+  candidates.forEach(
+    ([
+      left,
+      top,
+    ]) => {
+      const rect = createCandidateRect(
+        left,
+        top,
+        width,
+        height,
+        paneWidth,
+        paneHeight,
+      );
+
+      const key = (
+        `${Math.round(rect.left)}:`
+        + `${Math.round(rect.top)}`
+      );
+
+      if (!unique.has(
+        key,
+      )) {
+        unique.set(
+          key,
+          rect,
+        );
+      }
+    },
+  );
+
+  return Array.from(
+    unique.values(),
+  );
+}
+
+
+function candidateScore(
+  candidate,
+  anchor,
+  occupiedCards,
+  allRegions,
+) {
+  const cardOverlap = occupiedCards.reduce(
+    (
+      total,
+      occupied,
+    ) => (
+      total
+      + intersectionArea(
+        candidate,
+        occupied,
+      )
+    ),
+    0,
+  );
+
+  const regionOverlap = allRegions.reduce(
+    (
+      total,
+      region,
+    ) => (
+      total
+      + intersectionArea(
+        candidate,
+        region,
+      )
+    ),
+    0,
+  );
+
+  const distance = distanceBetweenCenters(
+    candidate,
+    anchor,
+  );
+
+  return (
+    cardOverlap
+    * CARD_OVERLAP_WEIGHT
+    + regionOverlap
+    * REGION_OVERLAP_WEIGHT
+    + distance
+    * DISTANCE_WEIGHT
+  );
+}
+
+
+function layoutOverlayAnnotations(
+  imagePane,
+  items,
+) {
+  items = items.filter((item) => !item.callout.classList.contains("is-hidden"));
+  const paneWidth = Math.max(
+    imagePane.clientWidth,
+    1,
+  );
+
+  const paneHeight = Math.max(
+    imagePane.clientHeight,
+    1,
+  );
+
+  const allRegions = items.flatMap(
+    (item) => (
+      item.bboxEntries
+        .filter(({ node }) => !node.classList.contains("is-hidden"))
+        .map(
+        ({
+          box,
+        }) => (
+          normalizedBoxToPixels(
+            box,
+            paneWidth,
+            paneHeight,
+          )
+        ),
+      )
+    ),
+  );
+
+  const occupiedCards = [];
+  for (const item of items) {
+    const box = reviewCalloutBox(item.callout);
+    if (box) {
+      const rect = normalizedBoxToPixels(
+        { xMin: box.x_min, yMin: box.y_min, xMax: box.x_max, yMax: box.y_max },
+        paneWidth,
+        paneHeight,
+      );
+      item.callout.style.left = `${box.x_min / 10}%`;
+      item.callout.style.top = `${box.y_min / 10}%`;
+      item.callout.style.width = `${(box.x_max - box.x_min) / 10}%`;
+      item.callout.style.height = `${(box.y_max - box.y_min) / 10}%`;
+      item.callout.style.visibility = "visible";
+      occupiedCards.push(rect);
+    }
+  }
+
+  const orderedItems = items.filter((item) => !reviewCalloutBox(item.callout))
+    .map(
+      (item) => {
+        const regionRects = (
+          item.bboxEntries
+            .filter(({ node }) => !node.classList.contains("is-hidden"))
+            .map(
+            ({
+              box,
+            }) => (
+              normalizedBoxToPixels(
+                box,
+                paneWidth,
+                paneHeight,
+              )
+            ),
+          )
+        );
+
+        const anchor = unionRect(
+          regionRects,
+          paneWidth,
+          paneHeight,
+        );
+
+        return {
+          ...item,
+          anchor,
+        };
+      },
+    )
+    .sort(
+      (
+        left,
+        right,
+      ) => (
+        left.anchor.top
+        - right.anchor.top
+        || left.anchor.left
+        - right.anchor.left
+        || left.findingIndex
+        - right.findingIndex
+      ),
+    );
+
+  orderedItems.forEach(
+    (item) => {
+      const calloutWidth = Math.max(
+        item.callout.offsetWidth,
+        1,
+      );
+
+      const calloutHeight = Math.max(
+        item.callout.offsetHeight,
+        1,
+      );
+
+      const candidates = candidateRects(
+        item.anchor,
+        calloutWidth,
+        calloutHeight,
+        paneWidth,
+        paneHeight,
+      );
+
+      const best = candidates.reduce(
+        (
+          currentBest,
+          candidate,
+        ) => {
+          const score = candidateScore(
+            candidate,
+            item.anchor,
+            occupiedCards,
+            allRegions,
+          );
+
+          if (
+            currentBest === null
+            || score < currentBest.score
+          ) {
+            return {
+              rect: candidate,
+              score,
+            };
+          }
+
+          return currentBest;
+        },
+        null,
+      );
+
+      if (!best) {
+        return;
+      }
+
+      item.callout.style.left = (
+        `${best.rect.left}px`
+      );
+
+      item.callout.style.top = (
+        `${best.rect.top}px`
+      );
+
+      item.callout.style.visibility = (
+        "visible"
+      );
+
+      occupiedCards.push(
+        best.rect,
+      );
+    },
+  );
+}
+
+
+function nearestConnectorPoints(
+  bboxRect,
+  calloutRect,
+  paneRect,
+) {
+  const box = {
+    left: (
+      bboxRect.left
+      - paneRect.left
+    ),
+    top: (
+      bboxRect.top
+      - paneRect.top
+    ),
+    right: (
+      bboxRect.right
+      - paneRect.left
+    ),
+    bottom: (
+      bboxRect.bottom
+      - paneRect.top
+    ),
+  };
+
+  const callout = {
+    left: (
+      calloutRect.left
+      - paneRect.left
+    ),
+    top: (
+      calloutRect.top
+      - paneRect.top
+    ),
+    right: (
+      calloutRect.right
+      - paneRect.left
+    ),
+    bottom: (
+      calloutRect.bottom
+      - paneRect.top
+    ),
+  };
+
+  const boxCenterX = (
+    box.left
+    + box.right
+  ) / 2;
+
+  const boxCenterY = (
+    box.top
+    + box.bottom
+  ) / 2;
+
+  const calloutCenterX = (
+    callout.left
+    + callout.right
+  ) / 2;
+
+  const calloutCenterY = (
+    callout.top
+    + callout.bottom
+  ) / 2;
+
+  const horizontalDelta = (
+    calloutCenterX
+    - boxCenterX
+  );
+
+  const verticalDelta = (
+    calloutCenterY
+    - boxCenterY
+  );
+
+  if (
+    Math.abs(
+      horizontalDelta,
+    )
+    >= Math.abs(
+      verticalDelta,
+    )
+  ) {
+    return {
+      start: {
+        x: (
+          horizontalDelta >= 0
+            ? box.right
+            : box.left
+        ),
+        y: boxCenterY,
+      },
+      end: {
+        x: (
+          horizontalDelta >= 0
+            ? callout.left
+            : callout.right
+        ),
+        y: calloutCenterY,
+      },
+      axis: "horizontal",
+    };
+  }
+
+  return {
+    start: {
+      x: boxCenterX,
+      y: (
+        verticalDelta >= 0
+          ? box.bottom
+          : box.top
+      ),
+    },
+    end: {
+      x: calloutCenterX,
+      y: (
+        verticalDelta >= 0
+          ? callout.top
+          : callout.bottom
+      ),
+    },
+    axis: "vertical",
+  };
+}
+
+
+function drawConnector(
+  imagePane,
+  svg,
+  polyline,
+  bboxNode,
+  callout,
+) {
+  if (
+    !bboxNode
+    || !callout
+  ) {
+    polyline.setAttribute(
+      "points",
+      "",
+    );
+
+    return;
+  }
+
+  const paneRect = (
+    imagePane.getBoundingClientRect()
+  );
+
+  const bboxRect = (
+    bboxNode.getBoundingClientRect()
+  );
+
+  const calloutRect = (
+    callout.getBoundingClientRect()
+  );
+
+  const width = Math.max(
+    imagePane.clientWidth,
+    1,
+  );
+
+  const height = Math.max(
+    imagePane.clientHeight,
+    1,
+  );
+
+  svg.setAttribute(
+    "viewBox",
+    `0 0 ${width} ${height}`,
+  );
+
+  const points = nearestConnectorPoints(
+    bboxRect,
+    calloutRect,
+    paneRect,
+  );
+
+  if (
+    points.axis === "horizontal"
+  ) {
+    const elbowX = (
+      points.start.x
+      + (
+        points.end.x
+        - points.start.x
+      ) / 2
+    );
+
+    polyline.setAttribute(
+      "points",
+      [
+        (
+          `${points.start.x},`
+          + `${points.start.y}`
+        ),
+        (
+          `${elbowX},`
+          + `${points.start.y}`
+        ),
+        (
+          `${elbowX},`
+          + `${points.end.y}`
+        ),
+        (
+          `${points.end.x},`
+          + `${points.end.y}`
+        ),
+      ].join(
+        " ",
+      ),
+    );
+
+    return;
+  }
+
+  const elbowY = (
+    points.start.y
+    + (
+      points.end.y
+      - points.start.y
+    ) / 2
+  );
+
+  polyline.setAttribute(
+    "points",
+    [
+      (
+        `${points.start.x},`
+        + `${points.start.y}`
+      ),
+      (
+        `${points.start.x},`
+        + `${elbowY}`
+      ),
+      (
+        `${points.end.x},`
+        + `${elbowY}`
+      ),
+      (
+        `${points.end.x},`
+        + `${points.end.y}`
+      ),
+    ].join(
+      " ",
+    ),
+  );
+}
+
+
+/** Связывает собственные рамки и карточку с единым выбором finding по ID. */
+function bindFindingInteractions(item, selection, { bindCallout = true } = {}) {
+  const id = item.callout.dataset.findingId;
+  const enter = () => selection.enter(id);
+  const leave = () => selection.leave(id);
+  const select = () => selection.select(id);
+  if (bindCallout) {
+    selection.register(item);
+    item.callout.addEventListener("pointerenter", enter);
+    item.callout.addEventListener("pointerleave", leave);
+    item.callout.addEventListener("focusin", enter);
+    item.callout.addEventListener("focusout", (event) => {
+      if (!event.relatedTarget || !item.callout.contains(event.relatedTarget)) leave();
+    });
+    item.callout.addEventListener("click", select);
+    item.callout.addEventListener("keydown", (event) => {
+      if (event.target === item.callout && ["Enter", " "].includes(event.key)) {
+        event.preventDefault();
+        select();
+      }
+    });
+  }
+  for (const { node } of item.bboxEntries) {
+    node.addEventListener("pointerenter", enter);
+    node.addEventListener("pointerleave", leave);
+    node.addEventListener("click", select);
+  }
+  selection.redraw();
+}
+
+
+function createHypothesisDetails(hypotheses) {
+  const details = createElement("details", "analysis-result__hypotheses");
+  details.append(createElement(
+    "summary",
+    "analysis-result__hypotheses-summary",
+    `Неподтверждённые гипотезы (${hypotheses.length})`,
+  ));
+  hypotheses.forEach((finding) => {
+    const item = createElement("div", "analysis-result__hypothesis");
+    item.append(createElement("strong", "", findingComment(finding)));
+    if (finding.evidence) {
+      item.append(createElement("p", "", finding.evidence));
+    }
+    item.append(createElement(
+      "small",
+      "",
+      `Исходные области VLM, не подтверждены: ${JSON.stringify(finding.visual_regions ?? [])}`,
+    ));
+    details.append(item);
+  });
+  return details;
+}
+
+
+function appendPageVisualization(
+  page,
+  payload,
+  parent,
+  dependencies,
+  pageIndex,
+) {
+  const pageNumber = normalizedPage(
+    page.page_number,
+  );
+
+  if (pageNumber === null) {
+    return;
+  }
+
+  const section = createElement(
+    "section",
+    "analysis-result__page-visualization",
+  );
+
+  section.id = "analysis-page-" + pageNumber;
+  section.append(
+    createElement(
+      "h4",
+      "analysis-result__page-title",
+      `Лист/страница ${pageNumber}`,
+    ),
+  );
+
+  if (
+    page.localization_warning
+  ) {
+    section.append(
+      createElement(
+        "p",
+        (
+          "analysis-result__"
+          + "visualization-warning"
+        ),
+        page.localization_warning,
+      ),
+    );
+  }
+
+  const stage = createElement(
+    "div",
+    "analysis-result__page-stage",
+  );
+
+  const imagePane = createElement(
+    "div",
+    "analysis-result__page-image-pane",
+  );
+
+  const image = createElement(
+    "img",
+    "analysis-result__page-image",
+  );
+
+  image.alt = (
+    `Страница ${pageNumber} исходного PDF`
+  );
+
+  image.decoding = "async";
+
+  if (pageIndex > 0) {
+    image.loading = "lazy";
+  }
+
+  image.src = (
+    "data:image/png;base64,"
+    + String(
+      page.image_base64
+      || "",
+    )
+  );
+
+  const svg = (
+    document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "svg",
+    )
+  );
+
+  svg.classList.add(
+    "analysis-result__connectors",
+  );
+
+  svg.setAttribute(
+    "aria-hidden",
+    "true",
+  );
+
+  const annotationOverlay = createElement(
+    "div",
+    "analysis-result__annotation-list",
+  );
+
+  const findings = findingsForPage(
+    payload,
+    page,
+  );
+
+  const hypotheses = (Array.isArray(payload.findings) ? payload.findings : [])
+    .filter((finding) => finding.status === "hypothesis"
+      && normalizedPage(finding.page ?? finding.page_number) === pageNumber);
+  const items = [];
+  const reviewRecords = [];
+
+  for (const { finding, findingIndex } of findings) {
+    const callout = createCallout(finding, findingIndex, dependencies);
+    callout.dataset.reviewPage = String(pageNumber);
+    const bboxEntries = createBoundingBoxes(finding, findingIndex);
+    const connectorEntries = bboxEntries.map(({ node }) => {
+      node.dataset.findingId = String(finding.finding_id ?? "");
+      imagePane.append(node);
+      const polyline = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+      polyline.classList.add("analysis-result__connector");
+      polyline.dataset.findingId = String(finding.finding_id ?? "");
+      svg.append(polyline);
+      return { bboxNode: node, polyline };
+    });
+    const item = { finding, findingIndex, bboxEntries, callout, connectorEntries };
+    reviewRecords.push({
+      findingId: String(finding.finding_id ?? "").trim(), finding, findingIndex,
+      pageNumber, item: callout, callout,
+      secondaryEvidence: Number(finding.page ?? finding.page_number) !== pageNumber,
+      documentEvidence: Array.isArray(finding.document_context_basis_sources)
+        && finding.document_context_basis_sources.length > 0,
+      bboxEntries, connectorEntries,
+    });
+    callout.style.left = "0";
+    callout.style.top = "0";
+    callout.style.visibility = "hidden";
+    annotationOverlay.append(callout);
+    bindFindingInteractions(item, dependencies.findingSelection);
+    items.push(item);
+  }
+
+  if (!findings.length) {
+    annotationOverlay.append(
+      createElement(
+        "p",
+        "analysis-result__page-empty",
+        (
+          "На этой странице замечания "
+          + "не сформированы."
+        ),
+      ),
+    );
+  }
+
+  imagePane.append(
+    image,
+    svg,
+    annotationOverlay,
+  );
+
+  stage.append(
+    imagePane,
+  );
+
+  section.append(
+    stage,
+  );
+
+  if (hypotheses.length) {
+    section.append(createHypothesisDetails(hypotheses));
+  }
+
+  parent.append(
+    section,
+  );
+
+  const redraw = () => {
+    if (
+      imagePane.clientWidth <= 0
+      || imagePane.clientHeight <= 0
+    ) {
+      return;
+    }
+
+    layoutOverlayAnnotations(
+      imagePane,
+      items,
+    );
+
+    items.forEach(
+      (item) => {
+        item.connectorEntries.forEach(
+          ({
+            bboxNode,
+            polyline,
+          }) => {
+            drawConnector(
+              imagePane,
+              svg,
+              polyline,
+              bboxNode,
+              item.callout,
+            );
+          },
+        );
+      },
+    );
+  };
+
+  const scheduleRedraw = () => {
+    window.requestAnimationFrame(
+      redraw,
+    );
+  };
+
+  registerVisualizationReview(section, {
+    imagePane, image, svg, groups: items, records: reviewRecords, redraw: scheduleRedraw,
+    createReviewBoxes: (record, boxes) => createBoundingBoxes({
+      ...record.finding,
+      location: { status: "located", regions: boxes.map((bbox) => ({ bbox })) },
+    }, record.findingIndex),
+    bindReviewBoxes: (record) => bindFindingInteractions({
+      callout: record.item, bboxEntries: record.bboxEntries, connectorEntries: record.connectorEntries,
+    }, dependencies.findingSelection, { bindCallout: false }),
+  });
+
+  annotationOverlay.addEventListener("toggle", scheduleRedraw, true);
+
+  image.addEventListener(
+    "load",
+    scheduleRedraw,
+    {
+      once: true,
+    },
+  );
+
+  if (image.complete) {
+    scheduleRedraw();
+  }
+
+  if (
+    typeof ResizeObserver
+    !== "undefined"
+  ) {
+    const observer = (
+      new ResizeObserver(
+        scheduleRedraw,
+      )
+    );
+
+    observer.observe(
+      imagePane,
+    );
+
+  } else {
+    window.addEventListener(
+      "resize",
+      scheduleRedraw,
+      {
+        passive: true,
+      },
+    );
+  }
+}
+
+
+/**
+ * Добавляет изображения страниц перед текстовой частью результата.
+ */
+export function appendAnalysisVisualization(
+  payload,
+  visualization,
+  parent,
+  dependencies,
+) {
+  dependencies = { ...dependencies, findingSelection: createFindingSelection() };
+  const hasPdf = (
+    payload.source_mode === "pdf_only"
+    || payload.source_mode === "pdf_cad"
+  );
+
+  if (!hasPdf) {
+    return;
+  }
+
+  const section = createElement(
+    "section",
+    "analysis-result__visualization",
+  );
+
+  section.append(
+    createElement(
+      "h3",
+      "analysis-result__section-title",
+      "Визуализация замечаний",
+    ),
+  );
+
+  const pages = (
+    Array.isArray(
+      visualization?.pages,
+    )
+      ? visualization.pages
+      : []
+  );
+
+  if (!pages.length) {
+    section.append(
+      createElement(
+        "p",
+        (
+          "analysis-result__"
+          + "visualization-warning"
+        ),
+        (
+          visualization?.error
+          || "PDF-preview недоступен. "
+          + (
+            "Текстовые замечания "
+            + "приведены ниже."
+          )
+        ),
+      ),
+    );
+
+    parent.append(
+      section,
+    );
+
+    return;
+  }
+
+  pages
+    .slice()
+    .sort(
+      (
+        left,
+        right,
+      ) => (
+        Number(
+          left.page_number,
+        )
+        - Number(
+          right.page_number,
+        )
+      ),
+    )
+    .forEach(
+      (
+        page,
+        pageIndex,
+      ) => {
+        appendPageVisualization(
+          page,
+          payload,
+          section,
+          dependencies,
+          pageIndex,
+        );
+      },
+    );
+
+  parent.append(
+    section,
+  );
+}
